@@ -20,6 +20,7 @@ interface AppStateValue {
   sync: () => Promise<void>;
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
   markAllRead: () => Promise<void>;
+  markRead: (id: string) => Promise<void>;
   nextDemoDay: () => Promise<void>;
   resetData: () => Promise<void>;
 }
@@ -104,6 +105,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setAlerts(next);
   }, []);
 
+  const markRead = useCallback(async (id: string) => {
+    const next = (await storage.getAlerts()).map((a) => (a.id === id ? { ...a, read: true } : a));
+    await storage.setAlerts(next);
+    setAlerts(next);
+    setFresh((f) => f.map((a) => (a.id === id ? { ...a, read: true } : a)));
+  }, []);
+
   const nextDemoDay = useCallback(async () => {
     const step = Math.min((await storage.getDemoStep()) + 1, DEMO_LAST_STEP);
     await storage.setDemoStep(step);
@@ -130,10 +138,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       sync,
       updateSettings,
       markAllRead,
+      markRead,
       nextDemoDay,
       resetData,
     }),
-    [ready, syncing, settings, alerts, timeline, meta, demoStep, fresh, sync, updateSettings, markAllRead, nextDemoDay, resetData],
+    [ready, syncing, settings, alerts, timeline, meta, demoStep, fresh, sync, updateSettings, markAllRead, markRead, nextDemoDay, resetData],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

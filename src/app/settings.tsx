@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { subjectForCourse } from '../core/matcher';
 import {
@@ -13,20 +13,92 @@ import { notificationsSupported, showAlertNotifications } from '../platform/noti
 import { secrets } from '../platform/secrets';
 import { ESCHOOL_LOGIN_KEY, ESCHOOL_PASSWORD_KEY } from '../services/sync';
 import { useAppState } from '../state/AppState';
-import { Button, Card, SectionTitle } from '../ui/components';
-import { colors } from '../ui/theme';
+import { Btn, Screen, Dot, Kicker, Mono, ScreenHeader, Surface, Tag, Toggle } from '../ui/components';
+import { Icon } from '../ui/icons';
+import { colors, fonts, TAB_BAR_SPACE } from '../ui/theme';
 
 const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1' || Platform.OS === 'web';
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <View style={styles.row}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.label}>{label}</Text>
-        {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      </View>
+    <View style={{ gap: 12 }}>
+      <Kicker>{title}</Kicker>
       {children}
     </View>
+  );
+}
+
+function ThresholdCard() {
+  const { settings, updateSettings } = useAppState();
+  const t = settings.badGradeThreshold;
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.rowBaseline}>
+        <Text style={styles.cardTitle}>Погана оцінка: нижче {t}</Text>
+        <Mono style={{ fontSize: 10.5 }}>1–12</Mono>
+      </View>
+      <View style={styles.scale}>
+        {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => {
+          const below = n < t;
+          const cur = n === t;
+          return (
+            <Pressable
+              key={n}
+              accessibilityRole="button"
+              accessibilityLabel={`Поріг: нижче ${n}`}
+              accessibilityState={{ selected: cur }}
+              onPress={() => updateSettings({ badGradeThreshold: Math.max(2, n) })}
+              style={({ pressed }) => [
+                styles.cell,
+                {
+                  backgroundColor: below ? colors.redBg : cur ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)',
+                  borderColor: below ? colors.redBorder : cur ? colors.accent : 'rgba(29,31,32,0.08)',
+                },
+                pressed && { transform: [{ translateY: 1 }] },
+              ]}>
+              <Text style={[styles.cellText, { color: below ? colors.redInk : cur ? colors.accent700 : colors.neutral700 }]}>
+                {n}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.hint}>
+        Червоні оцінки (1–{t - 1}) викликають сповіщення. Торкніться клітинки, щоб змінити поріг.
+      </Text>
+    </Surface>
+  );
+}
+
+function ToggleRow({
+  label,
+  hint,
+  on,
+  onToggle,
+  disabled,
+  first,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onToggle: () => void;
+  disabled?: boolean;
+  first?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on, disabled }}
+      accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onToggle}
+      style={[styles.toggleRow, !first && styles.sep, disabled && { opacity: 0.6 }]}>
+      <View style={{ flex: 1, gap: 1 }}>
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.hint}>{hint}</Text>
+      </View>
+      <Toggle on={on} />
+    </Pressable>
   );
 }
 
@@ -61,25 +133,27 @@ function GoogleSection() {
   };
 
   return (
-    <Card>
-      <Text style={styles.label}>Google Клас (акаунт дитини)</Text>
-      {!googleAuthSupported ? (
-        <Text style={styles.hint}>Вхід Google доступний лише в Android-додатку. У веб-демо дані вигадані.</Text>
-      ) : connected ? (
-        <>
-          <Text style={styles.hint}>Підключено: {email ?? 'акаунт Google'}</Text>
-          <Button title="Відключити" variant="danger" onPress={signOut} />
-        </>
-      ) : (
-        <>
-          <Text style={styles.hint}>
-            Увійдіть Google-акаунтом, з яким дитина заходить у Google Клас. Доступ лише на читання.
-          </Text>
-          <Button title="Увійти через Google" onPress={signIn} loading={busy} />
-        </>
-      )}
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={connected ? colors.green : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас</Text>
+        <Tag label="акаунт дитини" fg={colors.neutral800} bg={colors.neutral100} />
+      </View>
+      <Text style={styles.hint}>
+        {!googleAuthSupported
+          ? 'Вхід Google доступний лише в Android-додатку. У веб-демо дані вигадані.'
+          : connected
+            ? `Підключено: ${email ?? 'акаунт Google'} · лише читання`
+            : 'Увійдіть Google-акаунтом, з яким дитина заходить у Google Клас. Доступ лише на читання.'}
+      </Text>
+      {googleAuthSupported &&
+        (connected ? (
+          <Btn title="Відключити" onPress={signOut} />
+        ) : (
+          <Btn variant="primary" title="Увійти через Google" onPress={signIn} loading={busy} style={{ minHeight: 42 }} />
+        ))}
       {error ? <Text style={styles.error}>{error}</Text> : null}
-    </Card>
+    </Surface>
   );
 }
 
@@ -110,33 +184,68 @@ function EschoolSection() {
   };
 
   return (
-    <Card>
-      <Text style={styles.label}>Єдина школа (логін батьків)</Text>
-      <Text style={styles.hint}>
-        Логін і пароль зберігаються лише на цьому телефоні в зашифрованому сховищі. Автоматичне читання оцінок ще
-        в розробці.
-      </Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Логін (email або телефон)"
-        autoCapitalize="none"
-        autoComplete="username"
-        value={login}
-        onChangeText={setLogin}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder={saved ? 'Пароль збережено — введіть, щоб змінити' : 'Пароль'}
-        secureTextEntry
-        autoComplete="password"
-        value={password}
-        onChangeText={setPassword}
-      />
-      <View style={styles.buttons}>
-        <Button title="Зберегти" onPress={save} disabled={!login.trim() || (!password && !saved)} />
-        {saved && <Button title="Видалити" variant="danger" onPress={forget} />}
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={saved ? colors.green : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Єдина школа</Text>
+        <Tag label="логін батьків" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
-    </Card>
+      <Text style={styles.hint}>
+        Логін і пароль зберігаються лише на цьому телефоні в зашифрованому сховищі. Автоматичне читання оцінок ще в
+        розробці.
+      </Text>
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>Логін</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Email або телефон"
+          placeholderTextColor={colors.neutral500}
+          autoCapitalize="none"
+          autoComplete="username"
+          value={login}
+          onChangeText={setLogin}
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>Пароль</Text>
+        <TextInput
+          style={styles.input}
+          placeholder={saved ? 'Збережено — введіть, щоб змінити' : 'Пароль'}
+          placeholderTextColor={colors.neutral500}
+          secureTextEntry
+          autoComplete="password"
+          value={password}
+          onChangeText={setPassword}
+        />
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Btn
+          title={saved && !password ? 'Збережено' : 'Зберегти'}
+          onPress={save}
+          disabled={!login.trim() || (!password && !saved)}
+          style={{ flex: 1 }}
+        />
+        {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 40 }} />}
+      </View>
+    </Surface>
+  );
+}
+
+function SubjectInput({ placeholder, initial, onSave }: { placeholder: string; initial: string; onSave: (v: string) => void }) {
+  const [value, setValue] = useState(initial);
+  const commit = () => {
+    if (value.trim() !== initial) onSave(value.trim());
+  };
+  return (
+    <TextInput
+      style={[styles.input, { flex: 1, height: 36, fontSize: 13 }]}
+      placeholder={placeholder}
+      placeholderTextColor={colors.neutral500}
+      value={value}
+      onChangeText={setValue}
+      onBlur={commit}
+      onSubmitEditing={commit}
+    />
   );
 }
 
@@ -149,116 +258,122 @@ function SubjectsSection() {
   }, [timeline]);
   const subjects = useMemo(() => [...new Set(timeline.flatMap((t) => t.grades.map((g) => g.subject)))], [timeline]);
 
-  if (courses.length === 0) return <Text style={styles.hint}>Курси з’являться після першої перевірки.</Text>;
-
   return (
-    <Card>
+    <Surface style={styles.card}>
       <Text style={styles.hint}>
         Якщо курс у Google Класі називається інакше, ніж предмет у Єдиній школі, впишіть назву предмета вручну.
       </Text>
+      {courses.length === 0 && <Text style={styles.hint}>Курси з’являться після першої перевірки.</Text>}
       {courses.map(([id, name]) => {
         const auto = subjectForCourse(id, name, subjects, {});
         return (
           <View key={id} style={styles.subjectRow}>
-            <Text style={[styles.label, { flex: 1 }]}>{name}</Text>
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
+            <Text style={[styles.subjectName, { flex: 1 }]}>{name}</Text>
+            <Icon name="arrow" size={14} color={colors.neutral500} />
+            <SubjectInput
               placeholder={auto ?? 'Предмет'}
-              defaultValue={settings.subjectMap[id] ?? ''}
-              onEndEditing={(e) =>
-                updateSettings({ subjectMap: { ...settings.subjectMap, [id]: e.nativeEvent.text.trim() } })
-              }
+              initial={settings.subjectMap[id] ?? ''}
+              onSave={(text) => updateSettings({ subjectMap: { ...settings.subjectMap, [id]: text } })}
             />
           </View>
         );
       })}
-    </Card>
+    </Surface>
   );
 }
 
 export default function SettingsScreen() {
   const { settings, updateSettings, resetData } = useAppState();
-  const t = settings.badGradeThreshold;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <SectionTitle>Сповіщення</SectionTitle>
-      <Card>
-        <Row label={`Погана оцінка: нижче ${t}`} hint={`12-бальна шкала: алерт для оцінок 1–${t - 1}`}>
-          <View style={styles.stepper}>
-            <Button title="−" variant="secondary" onPress={() => updateSettings({ badGradeThreshold: Math.max(2, t - 1) })} />
-            <Text style={styles.stepValue}>{t}</Text>
-            <Button title="+" variant="secondary" onPress={() => updateSettings({ badGradeThreshold: Math.min(12, t + 1) })} />
-          </View>
-        </Row>
-        <Row label="Нові завдання" hint="Сповіщати, коли вчитель додав завдання">
-          <Switch
-            value={settings.notifyNewAssignments}
-            onValueChange={(v) => updateSettings({ notifyNewAssignments: v })}
-          />
-        </Row>
-        {notificationsSupported && (
-          <Button
-            title="Надіслати тестове сповіщення"
-            variant="secondary"
-            onPress={() =>
-              showAlertNotifications([
-                {
-                  id: `test:${Date.now()}`,
-                  kind: 'bad_grade',
-                  severity: 'critical',
-                  title: 'Тестове сповіщення',
-                  body: 'Так виглядатиме алерт про погану оцінку.',
-                  createdAt: new Date().toISOString(),
-                },
-              ])
-            }
-          />
-        )}
-      </Card>
+    <Screen>
+      <ScreenHeader kicker="Конфігурація" title="Налаштування" />
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <Section title="Сповіщення">
+          <ThresholdCard />
+          <Surface style={{ paddingVertical: 4, paddingHorizontal: 14 }}>
+            <ToggleRow
+              first
+              label="Нові завдання"
+              hint="Сповіщати, коли вчитель додав завдання"
+              on={settings.notifyNewAssignments}
+              onToggle={() => updateSettings({ notifyNewAssignments: !settings.notifyNewAssignments })}
+            />
+            <ToggleRow
+              label="Демо-режим"
+              hint={forcedDemo ? 'У веб-версії завжди увімкнено' : 'Вимкніть, коли підключите акаунти'}
+              on={settings.demoMode}
+              disabled={forcedDemo}
+              onToggle={() => updateSettings({ demoMode: !settings.demoMode })}
+            />
+          </Surface>
+          {notificationsSupported && (
+            <Btn
+              title="Надіслати тестове сповіщення"
+              onPress={() =>
+                showAlertNotifications([
+                  {
+                    id: `test:${Date.now()}`,
+                    kind: 'bad_grade',
+                    severity: 'critical',
+                    title: 'Тестове сповіщення',
+                    body: 'Так виглядатиме алерт про погану оцінку.',
+                    createdAt: new Date().toISOString(),
+                  },
+                ])
+              }
+            />
+          )}
+        </Section>
 
-      <SectionTitle>Джерела даних</SectionTitle>
-      <Card>
-        <Row
-          label="Демо-режим"
-          hint={forcedDemo ? 'У веб-версії завжди увімкнено' : 'Вимкніть, коли підключите акаунти'}>
-          <Switch
-            value={settings.demoMode}
-            disabled={forcedDemo}
-            onValueChange={(v) => updateSettings({ demoMode: v })}
-          />
-        </Row>
-      </Card>
-      <GoogleSection />
-      <EschoolSection />
+        <Section title="Джерела даних">
+          <GoogleSection />
+          <EschoolSection />
+        </Section>
 
-      <SectionTitle>Відповідність предметів</SectionTitle>
-      <SubjectsSection />
+        <Section title="Відповідність предметів">
+          <SubjectsSection />
+        </Section>
 
-      <SectionTitle>Дані</SectionTitle>
-      <Button title="Очистити історію сповіщень" variant="danger" onPress={resetData} />
-    </ScrollView>
+        <Btn
+          title="Очистити історію сповіщень"
+          onPress={resetData}
+          style={{ minHeight: 42 }}
+          textStyle={{ color: colors.accent800 }}
+        />
+        <Mono style={{ fontSize: 10.5, textAlign: 'center' }}>Lesson Guard · фонова перевірка ≈ кожні 4 год</Mono>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 10, maxWidth: 720, width: '100%', alignSelf: 'center', paddingBottom: 40 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
-  label: { fontSize: 15, fontWeight: '600', color: colors.text },
-  hint: { fontSize: 13, color: colors.muted, lineHeight: 18 },
-  error: { fontSize: 13, color: colors.critical },
+  container: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: TAB_BAR_SPACE, gap: 18, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  card: { padding: 14, gap: 10 },
+  rowBaseline: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
+  cardTitle: { fontFamily: fonts.heading, fontWeight: '600', fontSize: 17, lineHeight: 20, color: colors.text },
+  scale: { flexDirection: 'row', gap: 3 },
+  cell: { flex: 1, height: 38, borderWidth: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  cellText: { fontFamily: fonts.heading, fontWeight: '600', fontSize: 14 },
+  hint: { fontFamily: fonts.body, fontSize: 12.5, lineHeight: 17, color: colors.neutral700 },
+  label: { fontFamily: fonts.body, fontSize: 14.5, fontWeight: '500', color: colors.text },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  sep: { borderTopWidth: 1, borderTopColor: colors.divider },
+  sourceHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  field: { gap: 5 },
+  fieldLabel: { fontFamily: fonts.body, fontSize: 12, color: 'rgba(29,31,32,0.7)' },
   input: {
+    height: 40,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
+    borderColor: colors.divider,
+    borderRadius: 12,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 15,
+    fontFamily: fonts.body,
+    fontSize: 14,
     color: colors.text,
-    backgroundColor: colors.card,
+    backgroundColor: 'rgba(233,233,234,0.7)',
   },
-  buttons: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stepValue: { fontSize: 18, fontWeight: '700', minWidth: 24, textAlign: 'center' },
   subjectRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  subjectName: { fontFamily: fonts.body, fontSize: 13.5, fontWeight: '500', color: colors.text },
+  error: { fontFamily: fonts.body, fontSize: 13, color: colors.redInk },
 });
