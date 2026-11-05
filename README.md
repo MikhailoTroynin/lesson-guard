@@ -16,7 +16,7 @@ Android-додаток для батьків. Він стежить за зав�
 
 На комп’ютері демо показується в макеті смартфона (як у дизайні), на телефоні — на весь екран.
 
-> Щоб демо запрацювало, один раз увімкніть Pages: **Settings → Pages → Build and deployment → Source: GitHub Actions**. Після цього кожне оновлення `main` перезбирає сайт.
+> Демо публікується в гілку `gh-pages`. Один раз налаштуйте Pages: **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages` / `(root)`**. Після цього кожне оновлення `main` перезбирає сайт.
 
 ### Автоматичне злиття в `main`
 
