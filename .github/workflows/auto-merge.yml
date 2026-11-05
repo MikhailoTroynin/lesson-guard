@@ -9,6 +9,7 @@ on:
       - '**'
       - '!main'
       - '!gh-pages'
+      - '!robot-data'
 
 permissions:
   contents: write

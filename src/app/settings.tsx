@@ -11,7 +11,8 @@ import {
 } from '../platform/googleAuth';
 import { notificationsSupported, showAlertNotifications } from '../platform/notifications';
 import { secrets } from '../platform/secrets';
-import { ESCHOOL_LOGIN_KEY, ESCHOOL_PASSWORD_KEY } from '../services/sync';
+import { DEFAULT_ROBOT_URL } from '../providers/robot';
+import { ESCHOOL_LOGIN_KEY, ESCHOOL_PASSWORD_KEY, ROBOT_PASSPHRASE_KEY, ROBOT_URL_KEY } from '../services/sync';
 import { useAppState } from '../state/AppState';
 import { Btn, Screen, Dot, Kicker, Mono, ScreenHeader, Surface, Tag, Toggle } from '../ui/components';
 import { Icon } from '../ui/icons';
@@ -191,8 +192,7 @@ function EschoolSection() {
         <Tag label="логін батьків" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
-        Логін і пароль зберігаються лише на цьому телефоні в зашифрованому сховищі. Автоматичне читання оцінок ще в
-        розробці.
+        Прямий вхід з телефону ще в розробці. Щоб читати оцінки вже зараз, увімкніть «Хмарний робот» вище.
       </Text>
       <View style={styles.field}>
         <Text style={styles.fieldLabel}>Логін</Text>
@@ -227,6 +227,89 @@ function EschoolSection() {
         />
         {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 40 }} />}
       </View>
+    </Surface>
+  );
+}
+
+function RobotSection() {
+  const { sync, meta } = useAppState();
+  const [url, setUrl] = useState('');
+  const [passphrase, setPassphrase] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      setUrl((await secrets.get(ROBOT_URL_KEY)) ?? '');
+      setSaved(!!(await secrets.get(ROBOT_PASSPHRASE_KEY)));
+    })();
+  }, []);
+
+  const save = async () => {
+    if (url.trim()) await secrets.set(ROBOT_URL_KEY, url.trim());
+    else await secrets.remove(ROBOT_URL_KEY);
+    if (passphrase) await secrets.set(ROBOT_PASSPHRASE_KEY, passphrase);
+    setPassphrase('');
+    setSaved(true);
+    await sync();
+  };
+
+  const forget = async () => {
+    await secrets.remove(ROBOT_URL_KEY);
+    await secrets.remove(ROBOT_PASSPHRASE_KEY);
+    setSaved(false);
+  };
+
+  const robotErrors = saved ? meta.errors : [];
+
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={saved ? (robotErrors.length ? colors.red : colors.green) : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот</Text>
+        <Tag label="без Google Cloud" fg={colors.neutral800} bg={colors.neutral100} />
+      </View>
+      <Text style={styles.hint}>
+        Робот у GitHub Actions сам заходить у Google Клас і Єдину школу через браузер і викладає зашифровані дані.
+        Логіни задаються в секретах репозиторію, тут — лише пароль робота (ROBOT_PASSPHRASE).
+      </Text>
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>Пароль робота</Text>
+        <TextInput
+          style={styles.input}
+          placeholder={saved ? 'Збережено — введіть, щоб змінити' : 'Той самий, що в ROBOT_PASSPHRASE'}
+          placeholderTextColor={colors.neutral500}
+          secureTextEntry
+          autoCapitalize="none"
+          value={passphrase}
+          onChangeText={setPassphrase}
+        />
+      </View>
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>Адреса даних (необов’язково)</Text>
+        <TextInput
+          style={[styles.input, { fontSize: 12 }]}
+          placeholder={DEFAULT_ROBOT_URL}
+          placeholderTextColor={colors.neutral500}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={url}
+          onChangeText={setUrl}
+        />
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Btn
+          title={saved && !passphrase ? 'Збережено' : 'Зберегти'}
+          onPress={save}
+          disabled={!passphrase && !saved}
+          style={{ flex: 1 }}
+        />
+        {saved && <Btn variant="ghost" title="Вимкнути" onPress={forget} style={{ minHeight: 40 }} />}
+      </View>
+      {robotErrors.map((e) => (
+        <Text key={e} style={styles.error}>
+          {e}
+        </Text>
+      ))}
     </Surface>
   );
 }
@@ -327,6 +410,7 @@ export default function SettingsScreen() {
         </Section>
 
         <Section title="Джерела даних">
+          <RobotSection />
           <GoogleSection />
           <EschoolSection />
         </Section>

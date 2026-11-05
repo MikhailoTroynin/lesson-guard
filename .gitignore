@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# robot
+robot-data/
+robot-debug/
+google-session.txt

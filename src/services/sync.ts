@@ -1,6 +1,7 @@
 import { DEMO_LAST_STEP, demoClassroom, demoGrades } from '../providers/demo';
 import { GoogleClassroomProvider } from '../providers/classroom/google';
 import { EschoolGradesProvider } from '../providers/eschool/client';
+import { DEFAULT_ROBOT_URL, RobotSource } from '../providers/robot';
 import type { ClassroomProvider, GradesProvider } from '../providers/types';
 import { getGoogleAccessToken, invalidateGoogleToken, isGoogleConnected } from '../platform/googleAuth';
 import { showAlertNotifications } from '../platform/notifications';
@@ -10,6 +11,8 @@ import { collectAndCheck, type CollectResult } from './collect';
 
 export const ESCHOOL_LOGIN_KEY = 'eschool.login';
 export const ESCHOOL_PASSWORD_KEY = 'eschool.password';
+export const ROBOT_URL_KEY = 'robot.url';
+export const ROBOT_PASSPHRASE_KEY = 'robot.passphrase';
 
 async function buildProviders(demo: boolean): Promise<{
   classroom: ClassroomProvider | null;
@@ -19,6 +22,12 @@ async function buildProviders(demo: boolean): Promise<{
     const step = Math.min(await storage.getDemoStep(), DEMO_LAST_STEP);
     const now = new Date();
     return { classroom: demoClassroom(step, now), grades: demoGrades(step, now) };
+  }
+  // Хмарний робот (Playwright у GitHub Actions) — нічого не треба налаштовувати в Google Cloud.
+  const robotPassphrase = await secrets.get(ROBOT_PASSPHRASE_KEY);
+  if (robotPassphrase) {
+    const robot = new RobotSource((await secrets.get(ROBOT_URL_KEY)) || DEFAULT_ROBOT_URL, robotPassphrase);
+    return { classroom: robot.classroom(), grades: robot.grades() };
   }
   const classroom = isGoogleConnected()
     ? new GoogleClassroomProvider({
