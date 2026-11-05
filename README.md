@@ -24,7 +24,7 @@ Android-додаток для батьків. Він стежить за зав�
 
 На комп’ютері демо показується в макеті смартфона (як у дизайні), на телефоні — на весь екран.
 
-> Демо публікується в гілку `gh-pages`. Один раз налаштуйте Pages: **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages` / `(root)`**. Після цього кожне оновлення `main` перезбирає сайт.
+> Демо збирається через `npx expo export --platform web` і публікується workflow-ом `.github/workflows/pages.yml` (GitHub Actions → Pages, без гілки `gh-pages`). Один раз увімкніть: **Settings → Pages → Build and deployment → Source: GitHub Actions**. Після цього кожне оновлення `main` перезбирає сайт. Адреса: https://mikhailotroynin.github.io/lesson-guard/
 
 ### Автоматичне злиття в `main`
 
