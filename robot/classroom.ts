@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from 'playwright';
 
 import type { Assignment, Attachment, Submission, SubmissionState } from '../src/core/types';
-import { meaningfulLength } from '../src/providers/classroom/google';
+import { htmlHasImages, meaningfulLength, pptxHasMedia } from '../src/providers/classroom/google';
 import { findDueDate, findPostedDate } from './dates';
 import type { Debug } from './debug';
 import { CLASSROOM } from './google';
@@ -34,6 +34,8 @@ interface ListItem {
 interface Card {
   text: string;
   links: { href: string; text: string }[];
+  /** У картці є елементи, схожі на вкладення (мініатюри, іконки файлів), навіть без посилань. */
+  attachmentLike: number;
 }
 
 interface Details {
@@ -69,7 +71,10 @@ async function collectList(page: Page, list: ListItem['list']): Promise<ListItem
   await settle(page);
   // Розгортаємо згорнуті групи («Цього тижня», «Раніше»…) і докручуємо список.
   for (let i = 0; i < 8; i++) {
-    const closed = page.locator('main [aria-expanded="false"], [role="main"] [aria-expanded="false"]');
+    // Без aria-haspopup — щоб не відкривати меню «⋮», а лише розгортати групи.
+    const closed = page.locator(
+      'main [aria-expanded="false"]:not([aria-haspopup]), [role="main"] [aria-expanded="false"]:not([aria-haspopup])',
+    );
     if ((await closed.count()) === 0) break;
     await closed.first().click({ timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(800);
@@ -101,7 +106,7 @@ async function readDetails(page: Page, item: ListItem): Promise<Details> {
     const HEAD = /^(ваша робота|your work|моя робота)$/i;
     const ACTION =
       /(здати|turn in|hand in|скасувати здачу|unsubmit|позначити як виконане|mark as done|додати або створити|add or create|надіслати повторно|resubmit)/i;
-    let card: { text: string; links: { href: string; text: string }[] } | null = null;
+    let card: { text: string; links: { href: string; text: string }[]; attachmentLike: number } | null = null;
     const heads = Array.from(document.querySelectorAll<HTMLElement>('h1,h2,h3,h4,div,span')).filter((e) =>
       HEAD.test((e.textContent || '').trim()),
     );
@@ -120,7 +125,11 @@ async function readDetails(page: Page, item: ListItem): Promise<Details> {
               href: a.href,
               text: ((a.innerText || a.getAttribute('aria-label') || a.title || '').split('\n')[0] || '').trim(),
             }));
-          card = { text: el.innerText, links };
+          // Мініатюри файлів Drive/Docs, навіть якщо вони не звичайні посилання.
+          const attachmentLike = el.querySelectorAll(
+            'img[src*="googleusercontent"], img[src*="drive"], [data-drive-id], [data-id][role="link"], [role="listitem"] a',
+          ).length;
+          card = { text: el.innerText, links, attachmentLike };
           break;
         }
       }
@@ -189,8 +198,21 @@ async function inspect(ctx: BrowserContext, att: Attachment): Promise<void> {
       return;
     }
     att.textLength = meaningfulLength(await res.text());
+    if (att.textLength === 0) {
+      // Немає тексту — можливо, там фото зошита.
+      if (kind === 'document') {
+        const html = await ctx.request.get(`https://docs.google.com/document/d/${att.id}/export?format=html`);
+        if (html.ok()) att.hasImages = htmlHasImages(await html.text());
+      } else if (kind === 'presentation') {
+        const pptx = await ctx.request.get(`https://docs.google.com/presentation/d/${att.id}/export/pptx`);
+        if (pptx.ok()) {
+          const buf = await pptx.body();
+          att.hasImages = pptxHasMedia(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+        }
+      }
+    }
   } catch {
-    att.textLength = null;
+    if (att.textLength === undefined) att.textLength = null;
   }
 }
 
@@ -252,6 +274,10 @@ export async function fetchClassroom(
             const att = linkToAttachment(l.href, l.text);
             await inspect(ctx, att);
             attachments.push(att);
+          }
+          if (attachments.length === 0 && d.card.attachmentLike > 0) {
+            // Щось прикріплено, але робот не зміг це прочитати — не здіймаємо хибну тривогу.
+            attachments.push({ kind: 'link', title: 'не вдалося розпізнати вкладення' });
           }
           m.submission = {
             id: `sub:${item.id}`,

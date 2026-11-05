@@ -132,7 +132,9 @@ async function main(): Promise<number> {
   await writeEncrypted(join(dataDir, 'state.json'), state, passphrase);
   log(`Збережено в ${dataDir}/ (зашифровано)`);
 
-  return snapshot.errors.eschool || snapshot.errors.classroom ? 1 : 0;
+  // Червоний запуск (і лист від GitHub) — лише коли джерело налаштоване, але не прочиталося.
+  const failed = Object.values(snapshot.errors).some((e) => e && !e.startsWith('робот не налаштований'));
+  return failed ? 1 : 0;
 }
 
 main().then(

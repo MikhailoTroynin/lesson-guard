@@ -22,6 +22,7 @@ export function isTurnedIn(sub: Submission): boolean {
 
 function isAttachmentEmpty(a: Attachment): boolean {
   if (a.kind !== 'driveFile') return false; // посилання, відео, форма — вважаємо змістом
+  if (a.hasImages) return false; // фото зошита в документі — теж робота
   if (a.textLength === 0) return true;
   if (a.sizeBytes === 0) return true;
   return false;

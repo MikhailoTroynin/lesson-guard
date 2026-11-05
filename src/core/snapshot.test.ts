@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { decryptText, encryptText, fromBase64, toBase64, WrongPassphraseError } from './snapshot';
+import { decryptText, encryptText, fromBase64, toBase64, utf8Decode, utf8Encode, WrongPassphraseError } from './snapshot';
 
 const rnd = (n: number) => new Uint8Array(randomBytes(n));
 
@@ -13,6 +13,14 @@ describe('base64', () => {
       expect(b64).toBe(Buffer.from(bytes).toString('base64'));
       expect([...fromBase64(b64)]).toEqual([...bytes]);
     }
+  });
+});
+
+describe('utf8', () => {
+  it('matches Node for Cyrillic, emoji and ASCII', () => {
+    const s = 'Оцінка 5 — «Дроби» ✅ 😀 abc';
+    expect([...utf8Encode(s)]).toEqual([...Buffer.from(s, 'utf8')]);
+    expect(utf8Decode(new Uint8Array(Buffer.from(s, 'utf8')))).toBe(s);
   });
 });
 

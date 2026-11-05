@@ -71,3 +71,14 @@ describe('Classroom "Your work" card', () => {
     ).toBeNull();
   });
 });
+
+describe('image detection', () => {
+  it('finds images in HTML and PPTX', async () => {
+    const { htmlHasImages, pptxHasMedia } = await import('../src/providers/classroom/google');
+    expect(htmlHasImages('<p></p><img src="x">')).toBe(true);
+    expect(htmlHasImages('<p> </p>')).toBe(false);
+    const zip = (s: string) => new Uint8Array(Buffer.from(`PK\x03\x04....${s}....`, 'latin1')).buffer;
+    expect(pptxHasMedia(zip('ppt/media/image1.png'))).toBe(true);
+    expect(pptxHasMedia(zip('ppt/slides/slide1.xml'))).toBe(false);
+  });
+});

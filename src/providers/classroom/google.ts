@@ -78,6 +78,22 @@ function gDate(d?: GDate): string | undefined {
   return `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
 }
 
+/** У HTML-експорті Google-документа є картинки. */
+export function htmlHasImages(html: string): boolean {
+  return /<img\b/i.test(html);
+}
+
+/** У PPTX (zip) є медіафайли: імена файлів у zip лежать відкритим текстом. */
+export function pptxHasMedia(bytes: ArrayBuffer): boolean {
+  const b = new Uint8Array(bytes);
+  const needle = [...'ppt/media/'].map((c) => c.charCodeAt(0));
+  outer: for (let i = 0; i + needle.length <= b.length; i++) {
+    for (let k = 0; k < needle.length; k++) if (b[i + k] !== needle[k]) continue outer;
+    return true;
+  }
+  return false;
+}
+
 /** Скільки значущих символів у тексті (без пробілів і роздільників CSV). */
 export function meaningfulLength(text: string): number {
   return text.replace(/^﻿/, '').replace(/[\s,;"]+/g, '').length;
@@ -102,7 +118,8 @@ export class GoogleClassroomProvider implements ClassroomProvider {
     this.now = opts.now ?? (() => new Date());
   }
 
-  private async request(url: string, asText = false): Promise<any> {
+  private async request(url: string, as: boolean | 'bytes' = false): Promise<any> {
+    const asText = as === true;
     let token = await this.opts.getAccessToken();
     let res = await this.fetchFn(url, { headers: { Authorization: `Bearer ${token}` } });
     if (res.status === 401 && this.opts.invalidateToken) {
@@ -119,7 +136,7 @@ export class GoogleClassroomProvider implements ClassroomProvider {
       }
       throw new GoogleApiError(res.status, `Google API ${res.status}: ${detail || res.statusText}`);
     }
-    return asText ? res.text() : res.json();
+    return as === 'bytes' ? res.arrayBuffer() : asText ? res.text() : res.json();
   }
 
   private async paged<T>(url: string, key: string): Promise<T[]> {
@@ -212,6 +229,25 @@ export class GoogleClassroomProvider implements ClassroomProvider {
     };
   }
 
+  /** Тексту немає — перевіряємо, чи є картинки. Помилка тут не робить файл «невідомим». */
+  private async checkImages(att: Attachment, mimeType: string): Promise<void> {
+    try {
+      if (mimeType === 'application/vnd.google-apps.document') {
+        const html: string = await this.request(`${DRIVE}/files/${att.id}/export?mimeType=text%2Fhtml`, true);
+        att.hasImages = htmlHasImages(html);
+      } else if (mimeType === 'application/vnd.google-apps.presentation') {
+        const pptx = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+        const bytes: ArrayBuffer = await this.request(
+          `${DRIVE}/files/${att.id}/export?mimeType=${encodeURIComponent(pptx)}`,
+          'bytes',
+        );
+        att.hasImages = pptxHasMedia(bytes);
+      }
+    } catch {
+      // лишаємо як є
+    }
+  }
+
   /** Заповнює textLength/sizeBytes. Якщо файл прочитати не вдалося — лишає невідомим. */
   private async inspectDriveFile(att: Attachment): Promise<void> {
     try {
@@ -226,6 +262,7 @@ export class GoogleClassroomProvider implements ClassroomProvider {
           true,
         );
         att.textLength = meaningfulLength(text);
+        if (att.textLength === 0) await this.checkImages(att, meta.mimeType);
       } else if (meta.size !== undefined) {
         att.sizeBytes = Number(meta.size);
       }

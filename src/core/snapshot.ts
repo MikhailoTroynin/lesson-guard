@@ -61,13 +61,43 @@ export function fromBase64(s: string): Uint8Array {
   return out.slice(0, o);
 }
 
+/**
+ * UTF-8 без TextEncoder/TextDecoder: у Hermes (Android) їх може не бути,
+ * а розшифрування мусить працювати саме там.
+ */
+export function utf8Encode(str: string): Uint8Array {
+  const out: number[] = [];
+  for (const ch of str) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return new Uint8Array(out);
+}
+
+export function utf8Decode(b: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < b.length; ) {
+    const x = b[i++];
+    let c: number;
+    if (x < 0x80) c = x;
+    else if (x < 0xe0) c = ((x & 31) << 6) | (b[i++] & 63);
+    else if (x < 0xf0) c = ((x & 15) << 12) | ((b[i++] & 63) << 6) | (b[i++] & 63);
+    else c = ((x & 7) << 18) | ((b[i++] & 63) << 12) | ((b[i++] & 63) << 6) | (b[i++] & 63);
+    out += String.fromCodePoint(c);
+  }
+  return out;
+}
+
 const keyCache = new Map<string, Uint8Array>();
 
 function deriveKey(passphrase: string, salt: Uint8Array, iter: number): Uint8Array {
   const cacheKey = `${iter}:${toBase64(salt)}:${passphrase}`;
   let key = keyCache.get(cacheKey);
   if (!key) {
-    key = pbkdf2(sha256, new TextEncoder().encode(passphrase), salt, { c: iter, dkLen: 32 });
+    key = pbkdf2(sha256, utf8Encode(passphrase), salt, { c: iter, dkLen: 32 });
     keyCache.clear();
     keyCache.set(cacheKey, key);
   }
@@ -82,7 +112,7 @@ export function encryptText(
 ): Envelope {
   const salt = randomBytes(16);
   const iv = randomBytes(12);
-  const data = gcm(deriveKey(passphrase, salt, iter), iv).encrypt(new TextEncoder().encode(plain));
+  const data = gcm(deriveKey(passphrase, salt, iter), iv).encrypt(utf8Encode(plain));
   return { v: 1, alg: 'A256GCM-PBKDF2-SHA256', iter, salt: toBase64(salt), iv: toBase64(iv), data: toBase64(data) };
 }
 
@@ -100,7 +130,7 @@ export function decryptText(env: Envelope, passphrase: string): string {
   const salt = fromBase64(env.salt);
   try {
     const plain = gcm(deriveKey(passphrase, salt, env.iter), fromBase64(env.iv)).decrypt(fromBase64(env.data));
-    return new TextDecoder().decode(plain);
+    return utf8Decode(plain);
   } catch {
     throw new WrongPassphraseError();
   }
