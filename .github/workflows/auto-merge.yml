@@ -47,7 +47,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main "$BRANCH"
+          git fetch origin "$BRANCH"
+          if ! git fetch origin main; then
+            echo "main ще не існує — створюю її з $BRANCH"
+            git push origin "origin/$BRANCH:refs/heads/main"
+            exit 0
+          fi
           git checkout -B main origin/main
           if git merge --ff-only "origin/$BRANCH"; then
             echo "Fast-forward main → $BRANCH"
