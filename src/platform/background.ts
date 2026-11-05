@@ -24,3 +24,8 @@ export async function registerBackgroundSync(): Promise<void> {
     await BackgroundTask.registerTaskAsync(SYNC_TASK, { minimumInterval: INTERVAL_MINUTES });
   }
 }
+
+/** На Android екран оновлюється при поверненні в додаток (AppState 'active'). */
+export function onBackgroundSync(_fn: () => void): () => void {
+  return () => {};
+}

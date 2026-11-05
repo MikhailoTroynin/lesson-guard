@@ -17,6 +17,8 @@ jobs:
     env:
       # Не секрет: OAuth client ID типу «Web» з Google Cloud (необов'язково).
       EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+      # Звідки додаток бере зашифровані дані хмарного робота.
+      EXPO_PUBLIC_ROBOT_URL: https://raw.githubusercontent.com/${{ github.repository }}/robot-data/snapshot.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

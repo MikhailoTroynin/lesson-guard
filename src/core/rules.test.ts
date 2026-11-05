@@ -67,6 +67,9 @@ describe('emptySubmissionReason', () => {
       }),
     ).toBeNull();
     expect(emptySubmissionReason({ ...base, attachments: [{ kind: 'driveFile', textLength: null }] })).toBeNull();
+    expect(
+      emptySubmissionReason({ ...base, attachments: [{ kind: 'driveFile', textLength: 0, hasImages: true }] }),
+    ).toBeNull();
     expect(emptySubmissionReason({ ...base, attachments: [{ kind: 'link', url: 'https://x' }] })).toBeNull();
   });
 });

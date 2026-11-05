@@ -1,0 +1,99 @@
+name: Robot
+
+# Хмарний робот: браузер (Playwright) заходить у «Єдину школу» і Google Клас
+# акаунтом дитини, збирає оцінки й завдання і кладе ЗАШИФРОВАНИЙ знімок у гілку
+# robot-data. Додаток на телефоні читає його з паролем робота.
+#
+# Секрети (Settings → Secrets and variables → Actions):
+#   ROBOT_PASSPHRASE  — будь-який довгий пароль (≥ 12 символів); той самий вводиться в додатку
+#   ESCHOOL_LOGIN     — логін дитини в Єдиній школі (номер телефону 380…)
+#   ESCHOOL_PASSWORD  — пароль дитини в Єдиній школі
+#   GOOGLE_SESSION    — рядок з `npm run robot:session` (одноразовий вхід у Google)
+#   GOOGLE_EMAIL / GOOGLE_PASSWORD — необов'язково: Google зазвичай не пускає з ними робота
+
+on:
+  schedule:
+    # Щогодини з 07:23 до 22:23 за Києвом (cron — у UTC).
+    - cron: '23 4-19 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Зберегти скріншоти сторінок (архів зашифровано паролем робота)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: robot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore robot memory
+        run: |
+          mkdir -p robot-data
+          if git fetch --depth=1 origin robot-data; then
+            git show FETCH_HEAD:state.json > robot-data/state.json || rm -f robot-data/state.json
+          else
+            echo "Гілки robot-data ще немає — перший запуск."
+          fi
+
+      - name: Run robot
+        id: robot
+        continue-on-error: true
+        env:
+          ROBOT_PASSPHRASE: ${{ secrets.ROBOT_PASSPHRASE }}
+          ESCHOOL_LOGIN: ${{ secrets.ESCHOOL_LOGIN }}
+          ESCHOOL_PASSWORD: ${{ secrets.ESCHOOL_PASSWORD }}
+          GOOGLE_SESSION: ${{ secrets.GOOGLE_SESSION }}
+          GOOGLE_EMAIL: ${{ secrets.GOOGLE_EMAIL }}
+          GOOGLE_PASSWORD: ${{ secrets.GOOGLE_PASSWORD }}
+          DATA_DIR: robot-data
+          DEBUG_DIR: ${{ inputs.debug && 'robot-debug' || '' }}
+        run: npm run robot
+
+      - name: Publish encrypted data to robot-data branch
+        if: hashFiles('robot-data/snapshot.json') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/robot-index"
+          git --work-tree=robot-data add -A
+          tree=$(git write-tree)
+          # Одна коміт-версія без історії: гілка не розростається.
+          commit=$(git commit-tree "$tree" -m "Robot data $(date -u +%FT%TZ)")
+          git push -f origin "$commit:refs/heads/robot-data"
+
+      - name: Encrypt debug screenshots
+        if: inputs.debug && hashFiles('robot-debug/**') != ''
+        env:
+          ROBOT_PASSPHRASE: ${{ secrets.ROBOT_PASSPHRASE }}
+        run: |
+          tar czf robot-debug.tgz robot-debug
+          openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:ROBOT_PASSPHRASE -in robot-debug.tgz -out robot-debug.tgz.enc
+      - uses: actions/upload-artifact@v4
+        if: inputs.debug && hashFiles('robot-debug.tgz.enc') != ''
+        with:
+          name: robot-debug-encrypted
+          path: robot-debug.tgz.enc
+          retention-days: 3
+
+      - name: Fail if a source could not be read
+        if: steps.robot.outcome != 'success'
+        run: |
+          echo "::error::Робот не зміг прочитати одне з джерел — подробиці в кроці «Run robot»."
+          exit 1

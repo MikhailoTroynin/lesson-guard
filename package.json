@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-google-signin/google-signin": "^17.0.0",
     "expo": "~58.0.23",
@@ -26,6 +28,8 @@
     "@types/react": "~19.3.0",
     "eslint": "^9.39.5",
     "eslint-config-expo": "^58.0.4",
+    "playwright": "^1.63.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3",
     "vitest": "^5.1.0"
   },
@@ -36,7 +40,9 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "export:web": "EXPO_PUBLIC_DEMO=1 expo export -p web"
+    "export:web": "expo export -p web",
+    "robot": "tsx robot/run.ts",
+    "robot:session": "tsx robot/session.ts"
   },
   "private": true
 }

@@ -61,3 +61,13 @@ export async function getGoogleAccessToken(): Promise<string> {
 export async function invalidateGoogleToken(token: string): Promise<void> {
   await GoogleSignin.clearCachedAccessToken(token);
 }
+
+// Веб-специфічні налаштування (client ID вводиться лише у браузері).
+export const webClientIdFromBuild = true;
+export function getWebClientId(): string {
+  return process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+}
+export function setWebClientId(_id: string): void {}
+export function googleTokenExpiresAt(): number | null {
+  return null;
+}
