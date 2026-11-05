@@ -31,7 +31,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - name: Web build (demo)
+      - name: Web build
         run: npm run export:web
 
   merge:

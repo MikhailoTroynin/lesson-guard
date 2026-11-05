@@ -29,7 +29,11 @@ function AppTabs() {
 
 export default function RootLayout() {
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      // У браузері: періодична перевірка, поки вкладка відкрита.
+      void registerBackgroundSync();
+      return;
+    }
     (async () => {
       await initNotifications();
       await ensurePermission();

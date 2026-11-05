@@ -23,7 +23,7 @@
     "web": {
       "favicon": "./assets/favicon.png",
       "output": "single",
-      "name": "Lesson Guard — демо"
+      "name": "Lesson Guard"
     },
     "plugins": [
       "expo-router",

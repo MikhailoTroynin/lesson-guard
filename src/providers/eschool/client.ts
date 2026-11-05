@@ -19,7 +19,7 @@ export interface EschoolCredentials {
 export class EschoolGradesProvider implements GradesProvider {
   constructor(
     private credentials: EschoolCredentials,
-    private fetchFn: typeof fetch = fetch,
+    private fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   async listGrades(_from: Date, _to: Date): Promise<Grade[]> {
