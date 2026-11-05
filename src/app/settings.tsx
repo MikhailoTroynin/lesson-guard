@@ -3,13 +3,17 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } fr
 
 import { subjectForCourse } from '../core/matcher';
 import {
+  getWebClientId,
   googleAuthSupported,
   googleEmail,
+  googleTokenExpiresAt,
   isGoogleConnected,
+  setWebClientId,
   signInGoogle,
   signOutGoogle,
+  webClientIdFromBuild,
 } from '../platform/googleAuth';
-import { notificationsSupported, showAlertNotifications } from '../platform/notifications';
+import { ensurePermission, notificationsSupported, showAlertNotifications } from '../platform/notifications';
 import { secrets } from '../platform/secrets';
 import { DEFAULT_ROBOT_URL } from '../providers/robot';
 import { ESCHOOL_LOGIN_KEY, ESCHOOL_PASSWORD_KEY, ROBOT_PASSPHRASE_KEY, ROBOT_URL_KEY } from '../services/sync';
@@ -18,7 +22,9 @@ import { Btn, Screen, Dot, Kicker, Mono, ScreenHeader, Surface, Tag, Toggle } fr
 import { Icon } from '../ui/icons';
 import { colors, fonts, TAB_BAR_SPACE } from '../ui/theme';
 
-const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1' || Platform.OS === 'web';
+const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1';
+const isWeb = Platform.OS === 'web';
+const WEB_ORIGIN = typeof window !== 'undefined' ? window.location.origin : 'https://mikhailotroynin.github.io';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -108,7 +114,16 @@ function GoogleSection() {
   const [connected, setConnected] = useState(() => googleAuthSupported && isGoogleConnected());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const { sync } = useAppState();
+  const [clientId, setClientId] = useState(() => getWebClientId());
+  const [clientDraft, setClientDraft] = useState(clientId);
+  const { settings, updateSettings, sync } = useAppState();
+  const needsClientId = isWeb && !webClientIdFromBuild && !clientId;
+  const expiresAt = isWeb ? googleTokenExpiresAt() : null;
+
+  const saveClientId = () => {
+    setWebClientId(clientDraft);
+    setClientId(getWebClientId());
+  };
 
   const signIn = async () => {
     setBusy(true);
@@ -118,7 +133,10 @@ function GoogleSection() {
       if (e) {
         setEmail(e);
         setConnected(true);
-        await sync();
+        if (isWeb) void ensurePermission();
+        // Підключили справжній акаунт — переходимо з демо на реальні дані.
+        if (settings.demoMode && !forcedDemo) await updateSettings({ demoMode: false });
+        else await sync();
       }
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -146,8 +164,35 @@ function GoogleSection() {
           : connected
             ? `Підключено: ${email ?? 'акаунт Google'} · лише читання`
             : 'Увійдіть Google-акаунтом, з яким дитина заходить у Google Клас. Доступ лише на читання.'}
+        {connected && expiresAt
+          ? ` · сесія Google до ${new Date(expiresAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}, далі оновлюється кнопкою «Перевірити зараз»`
+          : ''}
       </Text>
+      {isWeb && !webClientIdFromBuild && (!connected || !clientId) && (
+        <View style={styles.field}>
+          <Text style={styles.fieldLabel}>OAuth Client ID (тип «Web application»)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="1234567890-abc.apps.googleusercontent.com"
+            placeholderTextColor={colors.neutral500}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={clientDraft}
+            onChangeText={setClientDraft}
+            onBlur={saveClientId}
+            onSubmitEditing={saveClientId}
+          />
+          <Text style={styles.hint}>
+            Google Cloud Console → Credentials → OAuth client ID → Web application. В «Authorized JavaScript origins»
+            додайте {WEB_ORIGIN}. Зберігається лише в цьому браузері.
+          </Text>
+          {clientDraft.trim() !== clientId && (
+            <Btn title="Зберегти Client ID" onPress={saveClientId} disabled={!clientDraft.trim()} />
+          )}
+        </View>
+      )}
       {googleAuthSupported &&
+        !needsClientId &&
         (connected ? (
           <Btn title="Відключити" onPress={signOut} />
         ) : (
@@ -192,8 +237,12 @@ function EschoolSection() {
         <Tag label="логін батьків" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
-        Прямий вхід з телефону ще в розробці. Щоб читати оцінки вже зараз, увімкніть «Хмарний робот» вище.
+        {isWeb
+          ? 'У браузері підключення недоступне: сайт Єдиної школи не дозволяє запити з інших доменів, а пароль батьків не варто зберігати в браузері. Щоб бачити оцінки, увімкніть «Хмарний робот» вище.'
+          : 'Прямий вхід з телефону ще в розробці. Щоб читати оцінки вже зараз, увімкніть «Хмарний робот» вище.'}
       </Text>
+      {!isWeb && (
+        <>
       <View style={styles.field}>
         <Text style={styles.fieldLabel}>Логін</Text>
         <TextInput
@@ -227,6 +276,8 @@ function EschoolSection() {
         />
         {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 40 }} />}
       </View>
+        </>
+      )}
     </Surface>
   );
 }
@@ -384,7 +435,7 @@ export default function SettingsScreen() {
             />
             <ToggleRow
               label="Демо-режим"
-              hint={forcedDemo ? 'У веб-версії завжди увімкнено' : 'Вимкніть, коли підключите акаунти'}
+              hint={forcedDemo ? 'У цій збірці завжди увімкнено' : 'Вимикається сам після входу в Google'}
               on={settings.demoMode}
               disabled={forcedDemo}
               onToggle={() => updateSettings({ demoMode: !settings.demoMode })}
@@ -393,8 +444,9 @@ export default function SettingsScreen() {
           {notificationsSupported && (
             <Btn
               title="Надіслати тестове сповіщення"
-              onPress={() =>
-                showAlertNotifications([
+              onPress={async () => {
+                if (!(await ensurePermission())) return;
+                await showAlertNotifications([
                   {
                     id: `test:${Date.now()}`,
                     kind: 'bad_grade',
@@ -403,8 +455,8 @@ export default function SettingsScreen() {
                     body: 'Так виглядатиме алерт про погану оцінку.',
                     createdAt: new Date().toISOString(),
                   },
-                ])
-              }
+                ]);
+              }}
             />
           )}
         </Section>

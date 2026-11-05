@@ -97,7 +97,8 @@ export class GoogleClassroomProvider implements ClassroomProvider {
   private now: () => Date;
 
   constructor(private opts: GoogleClassroomOptions) {
-    this.fetchFn = opts.fetchFn ?? fetch;
+    // Обгортка: у браузері fetch, викликаний як метод іншого об’єкта, падає з «Illegal invocation».
+    this.fetchFn = opts.fetchFn ?? ((input, init) => fetch(input, init));
     this.now = opts.now ?? (() => new Date());
   }
 

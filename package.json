@@ -40,7 +40,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "export:web": "EXPO_PUBLIC_DEMO=1 expo export -p web",
+    "export:web": "expo export -p web",
     "robot": "tsx robot/run.ts",
     "robot:session": "tsx robot/session.ts"
   },
