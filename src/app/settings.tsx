@@ -15,8 +15,15 @@ import {
 } from '../platform/googleAuth';
 import { ensurePermission, notificationsSupported, showAlertNotifications } from '../platform/notifications';
 import { secrets } from '../platform/secrets';
+import { eschoolLogin } from '../providers/eschool/client';
 import { DEFAULT_ROBOT_URL } from '../providers/robot';
-import { ESCHOOL_LOGIN_KEY, ESCHOOL_PASSWORD_KEY, ROBOT_PASSPHRASE_KEY, ROBOT_URL_KEY } from '../services/sync';
+import {
+  ESCHOOL_LOGIN_KEY,
+  ESCHOOL_PASSWORD_KEY,
+  ROBOT_PASSPHRASE_KEY,
+  ROBOT_URL_KEY,
+  eschoolTokenStore,
+} from '../services/sync';
 import { useAppState } from '../state/AppState';
 import { Btn, Screen, Dot, Kicker, Mono, ScreenHeader, Surface, Tag, Toggle } from '../ui/components';
 import { Icon } from '../ui/icons';
@@ -116,7 +123,8 @@ function GoogleSection() {
   const [error, setError] = useState('');
   const [clientId, setClientId] = useState(() => getWebClientId());
   const [clientDraft, setClientDraft] = useState(clientId);
-  const { settings, updateSettings, sync } = useAppState();
+  const { settings, updateSettings, sync, meta } = useAppState();
+  const syncErrors = connected && !settings.demoMode ? sourceErrors(meta.errors, 'Google Клас:') : [];
   const needsClientId = isWeb && !webClientIdFromBuild && !clientId;
   const expiresAt = isWeb ? googleTokenExpiresAt() : null;
 
@@ -154,16 +162,16 @@ function GoogleSection() {
   return (
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
-        <Dot color={connected ? colors.green : colors.neutral400} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас</Text>
-        <Tag label="акаунт дитини" fg={colors.neutral800} bg={colors.neutral100} />
+        <Dot color={connected ? (syncErrors.length ? colors.red : colors.green) : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Google акаунт</Text>
+        <Tag label="завдання" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
         {!googleAuthSupported
           ? 'Вхід Google доступний лише в Android-додатку. У веб-демо дані вигадані.'
           : connected
             ? `Підключено: ${email ?? 'акаунт Google'} · лише читання`
-            : 'Увійдіть Google-акаунтом, з яким дитина заходить у Google Клас. Доступ лише на читання.'}
+            : 'Натисніть кнопку й увійдіть Google-акаунтом дитини (тим, з яким вона заходить у Google Клас). Пароль вводиться на сторінці Google, додаток його не бачить. Доступ лише на читання.'}
         {connected && expiresAt
           ? ` · сесія Google до ${new Date(expiresAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}, далі оновлюється кнопкою «Перевірити зараз»`
           : ''}
@@ -199,14 +207,27 @@ function GoogleSection() {
           <Btn variant="primary" title="Увійти через Google" onPress={signIn} loading={busy} style={{ minHeight: 42 }} />
         ))}
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {!error &&
+        syncErrors.map((e) => (
+          <Text key={e} style={styles.error}>
+            {e}
+          </Text>
+        ))}
     </Surface>
   );
 }
 
+function sourceErrors(errors: string[], prefix: string): string[] {
+  return errors.filter((e) => e.startsWith(prefix)).map((e) => e.slice(prefix.length).trim());
+}
+
 function EschoolSection() {
+  const { settings, updateSettings, sync, meta } = useAppState();
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -215,69 +236,104 @@ function EschoolSection() {
     })();
   }, []);
 
-  const save = async () => {
-    await secrets.set(ESCHOOL_LOGIN_KEY, login.trim());
-    if (password) await secrets.set(ESCHOOL_PASSWORD_KEY, password);
-    setPassword('');
-    setSaved(true);
+  const signIn = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const pass = password || (await secrets.get(ESCHOOL_PASSWORD_KEY)) || '';
+      // Спершу перевіряємо логін і пароль на сайті, і лише потім зберігаємо.
+      const token = await eschoolLogin({ login: login.trim(), password: pass });
+      await secrets.set(ESCHOOL_LOGIN_KEY, login.trim());
+      await secrets.set(ESCHOOL_PASSWORD_KEY, pass);
+      await eschoolTokenStore.set(token || null);
+      setPassword('');
+      setSaved(true);
+      // Підключили справжній акаунт — переходимо з демо на реальні дані.
+      if (settings.demoMode && !forcedDemo) await updateSettings({ demoMode: false });
+      else await sync();
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      setError(msg.charAt(0).toUpperCase() + msg.slice(1));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const forget = async () => {
     await secrets.remove(ESCHOOL_LOGIN_KEY);
     await secrets.remove(ESCHOOL_PASSWORD_KEY);
+    await eschoolTokenStore.set(null);
     setLogin('');
+    setPassword('');
     setSaved(false);
   };
+
+  const syncErrors = saved && !settings.demoMode ? sourceErrors(meta.errors, 'Єдина школа:') : [];
 
   return (
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
-        <Dot color={saved ? colors.green : colors.neutral400} />
+        <Dot color={saved ? (syncErrors.length ? colors.red : colors.green) : colors.neutral400} />
         <Text style={[styles.cardTitle, { flex: 1 }]}>Єдина школа</Text>
-        <Tag label="логін батьків" fg={colors.neutral800} bg={colors.neutral100} />
+        <Tag label="оцінки" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
         {isWeb
-          ? 'У браузері підключення недоступне: сайт Єдиної школи не дозволяє запити з інших доменів, а пароль батьків не варто зберігати в браузері. Щоб бачити оцінки, увімкніть «Хмарний робот» вище.'
-          : 'Прямий вхід з телефону ще в розробці. Щоб читати оцінки вже зараз, увімкніть «Хмарний робот» вище.'}
+          ? 'У браузері вхід недоступний: сайт Єдиної школи не приймає вхід з інших доменів. Введіть логін і пароль в Android-додатку.'
+          : saved
+            ? `Підключено: ${login} · пароль зберігається лише на телефоні, у зашифрованому сховищі`
+            : 'Логін і пароль дитини з eschool-ua.com (логін — номер телефону 380…). Зберігаються лише на телефоні.'}
       </Text>
       {!isWeb && (
         <>
-      <View style={styles.field}>
-        <Text style={styles.fieldLabel}>Логін</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Email або телефон"
-          placeholderTextColor={colors.neutral500}
-          autoCapitalize="none"
-          autoComplete="username"
-          value={login}
-          onChangeText={setLogin}
-        />
-      </View>
-      <View style={styles.field}>
-        <Text style={styles.fieldLabel}>Пароль</Text>
-        <TextInput
-          style={styles.input}
-          placeholder={saved ? 'Збережено — введіть, щоб змінити' : 'Пароль'}
-          placeholderTextColor={colors.neutral500}
-          secureTextEntry
-          autoComplete="password"
-          value={password}
-          onChangeText={setPassword}
-        />
-      </View>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Btn
-          title={saved && !password ? 'Збережено' : 'Зберегти'}
-          onPress={save}
-          disabled={!login.trim() || (!password && !saved)}
-          style={{ flex: 1 }}
-        />
-        {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 40 }} />}
-      </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Логін</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="380XXXXXXXXX"
+              placeholderTextColor={colors.neutral500}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="username"
+              keyboardType="email-address"
+              value={login}
+              onChangeText={setLogin}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.fieldLabel}>Пароль</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={saved ? 'Збережено — введіть, щоб змінити' : 'Пароль'}
+              placeholderTextColor={colors.neutral500}
+              secureTextEntry
+              autoCapitalize="none"
+              autoComplete="password"
+              value={password}
+              onChangeText={setPassword}
+              onSubmitEditing={signIn}
+            />
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn
+              variant={saved && !password ? undefined : 'primary'}
+              title={saved && !password ? 'Перевірити вхід' : 'Увійти'}
+              onPress={signIn}
+              loading={busy}
+              disabled={!login.trim() || (!password && !saved)}
+              style={{ flex: 1, minHeight: 42 }}
+            />
+            {saved && <Btn variant="ghost" title="Відключити" onPress={forget} style={{ minHeight: 42 }} />}
+          </View>
         </>
       )}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {!error &&
+        syncErrors.map((e) => (
+          <Text key={e} style={styles.error}>
+            {e}
+          </Text>
+        ))}
     </Surface>
   );
 }
@@ -320,8 +376,8 @@ function RobotSection() {
         <Tag label="без Google Cloud" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
-        Робот у GitHub Actions сам заходить у Google Клас і Єдину школу через браузер і викладає зашифровані дані.
-        Логіни задаються в секретах репозиторію, тут — лише пароль робота (ROBOT_PASSPHRASE).
+        Не обов’язково. Потрібен, лише якщо вхід вище не працює: робот у GitHub Actions сам заходить у Google Клас і
+        Єдину школу і викладає зашифровані дані. Використовується тільки для джерела, яке не підключене вище.
       </Text>
       <View style={styles.field}>
         <Text style={styles.fieldLabel}>Пароль робота</Text>
@@ -416,13 +472,81 @@ function SubjectsSection() {
   );
 }
 
+function StatusCard() {
+  const { settings, meta, syncing, sync } = useAppState();
+  if (settings.demoMode) {
+    return (
+      <Text style={[styles.hint, { paddingHorizontal: 2 }]}>
+        Зараз увімкнено демо-режим із вигаданими даними. Він вимкнеться сам, щойно ви увійдете в Google або Єдину школу.
+      </Text>
+    );
+  }
+  const last = meta.lastRunAt
+    ? new Date(meta.lastRunAt).toLocaleString('uk-UA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : null;
+  const ok = meta.errors.length === 0;
+  return (
+    <Surface style={[styles.card, { flexDirection: 'row', alignItems: 'center' }]}>
+      <Dot color={ok ? colors.green : colors.red} />
+      <Text style={[styles.hint, { flex: 1 }]}>
+        {ok ? 'Усе працює.' : 'Є проблеми з підключенням (див. вище).'}
+        {last ? ` Остання перевірка: ${last}.` : ''} Далі — автоматично у фоні.
+      </Text>
+      <Btn title="Перевірити" onPress={sync} loading={syncing} style={{ minHeight: 36 }} />
+    </Surface>
+  );
+}
+
+function AdvancedSection() {
+  const { settings, updateSettings } = useAppState();
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={{ gap: 12 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((v) => !v)}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Kicker>{open ? 'Додатково ▾' : 'Додатково ▸'}</Kicker>
+      </Pressable>
+      {open && (
+        <>
+          <Surface style={{ paddingVertical: 4, paddingHorizontal: 14 }}>
+            <ToggleRow
+              first
+              label="Демо-режим"
+              hint={forcedDemo ? 'У цій збірці завжди увімкнено' : 'Вигадані дані. Вимикається сам після входу'}
+              on={settings.demoMode}
+              disabled={forcedDemo}
+              onToggle={() => updateSettings({ demoMode: !settings.demoMode })}
+            />
+          </Surface>
+          <RobotSection />
+          <Kicker>Відповідність предметів</Kicker>
+          <SubjectsSection />
+        </>
+      )}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const { settings, updateSettings, resetData } = useAppState();
 
   return (
     <Screen>
       <ScreenHeader kicker="Конфігурація" title="Налаштування" />
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled">
+        <Section title="Акаунти дитини">
+          <GoogleSection />
+          <EschoolSection />
+          <StatusCard />
+        </Section>
+
         <Section title="Сповіщення">
           <ThresholdCard />
           <Surface style={{ paddingVertical: 4, paddingHorizontal: 14 }}>
@@ -432,13 +556,6 @@ export default function SettingsScreen() {
               hint="Сповіщати, коли вчитель додав завдання"
               on={settings.notifyNewAssignments}
               onToggle={() => updateSettings({ notifyNewAssignments: !settings.notifyNewAssignments })}
-            />
-            <ToggleRow
-              label="Демо-режим"
-              hint={forcedDemo ? 'У цій збірці завжди увімкнено' : 'Вимикається сам після входу в Google'}
-              on={settings.demoMode}
-              disabled={forcedDemo}
-              onToggle={() => updateSettings({ demoMode: !settings.demoMode })}
             />
           </Surface>
           {notificationsSupported && (
@@ -461,15 +578,7 @@ export default function SettingsScreen() {
           )}
         </Section>
 
-        <Section title="Джерела даних">
-          <RobotSection />
-          <GoogleSection />
-          <EschoolSection />
-        </Section>
-
-        <Section title="Відповідність предметів">
-          <SubjectsSection />
-        </Section>
+        <AdvancedSection />
 
         <Btn
           title="Очистити історію сповіщень"

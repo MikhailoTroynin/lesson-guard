@@ -1,6 +1,6 @@
 import { DEMO_LAST_STEP, demoClassroom, demoGrades } from '../providers/demo';
 import { GoogleClassroomProvider } from '../providers/classroom/google';
-import { EschoolGradesProvider } from '../providers/eschool/client';
+import { EschoolGradesProvider, type TokenStore } from '../providers/eschool/client';
 import { DEFAULT_ROBOT_URL, RobotSource } from '../providers/robot';
 import type { ClassroomProvider, GradesProvider } from '../providers/types';
 import { getGoogleAccessToken, invalidateGoogleToken, isGoogleConnected } from '../platform/googleAuth';
@@ -11,6 +11,7 @@ import { collectAndCheck, type CollectResult } from './collect';
 
 export const ESCHOOL_LOGIN_KEY = 'eschool.login';
 export const ESCHOOL_PASSWORD_KEY = 'eschool.password';
+export const ESCHOOL_TOKEN_KEY = 'eschool.token';
 export const ROBOT_URL_KEY = 'robot.url';
 export const ROBOT_PASSPHRASE_KEY = 'robot.passphrase';
 
@@ -23,13 +24,9 @@ async function buildProviders(demo: boolean): Promise<{
     const now = new Date();
     return { classroom: demoClassroom(step, now), grades: demoGrades(step, now) };
   }
-  // Хмарний робот (Playwright у GitHub Actions) — нічого не треба налаштовувати в Google Cloud.
-  const robotPassphrase = await secrets.get(ROBOT_PASSPHRASE_KEY);
-  if (robotPassphrase) {
-    const robot = new RobotSource((await secrets.get(ROBOT_URL_KEY)) || DEFAULT_ROBOT_URL, robotPassphrase);
-    return { classroom: robot.classroom(), grades: robot.grades() };
-  }
-  const classroom = isGoogleConnected()
+  // Прямі підключення з налаштувань (Google + Єдина школа) мають пріоритет.
+  // Хмарний робот підставляється лише для джерела, яке напряму не підключене.
+  let classroom: ClassroomProvider | null = isGoogleConnected()
     ? new GoogleClassroomProvider({
         getAccessToken: getGoogleAccessToken,
         invalidateToken: invalidateGoogleToken,
@@ -37,9 +34,27 @@ async function buildProviders(demo: boolean): Promise<{
     : null;
   const login = await secrets.get(ESCHOOL_LOGIN_KEY);
   const password = await secrets.get(ESCHOOL_PASSWORD_KEY);
-  const grades = login && password ? new EschoolGradesProvider({ login, password }) : null;
+  let grades: GradesProvider | null =
+    login && password ? new EschoolGradesProvider({ login, password }, undefined, eschoolTokenStore) : null;
+
+  if (!classroom || !grades) {
+    const robotPassphrase = await secrets.get(ROBOT_PASSPHRASE_KEY);
+    if (robotPassphrase) {
+      const robot = new RobotSource((await secrets.get(ROBOT_URL_KEY)) || DEFAULT_ROBOT_URL, robotPassphrase);
+      classroom ??= robot.classroom();
+      grades ??= robot.grades();
+    }
+  }
   return { classroom, grades };
 }
+
+export const eschoolTokenStore: TokenStore = {
+  get: () => secrets.get(ESCHOOL_TOKEN_KEY),
+  set: async (t) => {
+    if (t) await secrets.set(ESCHOOL_TOKEN_KEY, t);
+    else await secrets.remove(ESCHOOL_TOKEN_KEY);
+  },
+};
 
 let running: Promise<CollectResult> | null = null;
 
