@@ -3,6 +3,7 @@ import { AppState as RNAppState } from 'react-native';
 
 import { DEFAULT_SETTINGS, type Alert, type Settings, type TimelineItem } from '../core/types';
 import { DEMO_LAST_STEP } from '../providers/demo';
+import { onBackgroundSync } from '../platform/background';
 import { storage, type SyncMeta } from '../platform/storage';
 import { performSync } from '../services/sync';
 
@@ -79,9 +80,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const sub = RNAppState.addEventListener('change', (st) => {
       if (st === 'active') void reload();
     });
+    const unsubBg = onBackgroundSync(() => void reload());
     return () => {
       cancelled = true;
       sub.remove();
+      unsubBg();
     };
   }, [reload, sync]);
 

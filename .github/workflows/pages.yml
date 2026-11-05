@@ -25,6 +25,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run export:web
+        env:
+          EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
       - name: SPA fallback and no Jekyll
         run: |
           cp dist/index.html dist/404.html
