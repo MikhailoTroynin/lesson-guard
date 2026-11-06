@@ -13,6 +13,11 @@ name: Google login
 
 on:
   workflow_dispatch:
+  # Лише щоб GitHub «побачив» новий workflow: мердж у main робить бот (GITHUB_TOKEN),
+  # а його push не реєструє нові workflow. На push сама робота пропускається.
+  push:
+    paths:
+      - '.github/workflows/google-login.yml'
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ concurrency:
 
 jobs:
   login:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
