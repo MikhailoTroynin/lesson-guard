@@ -87,10 +87,13 @@ async function main(): Promise<number> {
     }
 
     // ── Google Клас ──
-    const gEmail = env('GOOGLE_EMAIL');
+    const gEmail = config.google?.email ?? env('GOOGLE_EMAIL');
+    const gPassword = config.google?.password ?? env('GOOGLE_PASSWORD');
     if (gEmail || storage) {
       try {
-        const page = await ensureGoogleSession(ctx, { email: gEmail, password: env('GOOGLE_PASSWORD') }, debug, log);
+        const page = await ensureGoogleSession(ctx, { email: gEmail, password: gPassword }, debug, log, (text) =>
+          worker.notify(text),
+        );
         snapshot.classroom = await fetchClassroom(ctx, page, state.items, now, debug, log);
         log(
           `Google Клас: завдань ${snapshot.classroom.assignments.length}, здач ${snapshot.classroom.submissions.length}`,
@@ -100,7 +103,7 @@ async function main(): Promise<number> {
         log(`Google Клас: ПОМИЛКА — ${snapshot.errors.classroom}`);
       }
     } else {
-      snapshot.errors.classroom = 'робот не налаштований: додайте сесію Google на сторінці налаштувань (див. README)';
+      snapshot.errors.classroom = 'робот не налаштований: введіть email і пароль Google дитини на сторінці налаштувань';
       log(`Google Клас: ${snapshot.errors.classroom}`);
     }
 

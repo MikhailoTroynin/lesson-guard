@@ -15,7 +15,7 @@ export class GoogleLoginError extends Error {
 }
 
 const SESSION_HINT =
-  'Один раз збережіть сесію Google: на комп’ютері запустіть `npm run robot:session`, увійдіть у вікні Chrome і додайте рядок у секрет GOOGLE_SESSION (див. README).';
+  'Якщо так повторюється, попросіть адміністратора школи дозволити вхід через Google (див. README) або один раз збережіть сесію Google командою npm run robot:session.';
 
 function isClassroom(u: string): boolean {
   return new URL(u).hostname === 'classroom.google.com';
@@ -35,6 +35,8 @@ export async function ensureGoogleSession(
   creds: { email?: string; password?: string },
   debug: Debug,
   log: (s: string) => void,
+  /** Написати людям (Telegram), коли треба підтвердити вхід на телефоні. */
+  notify: (text: string) => Promise<void> = async () => {},
 ): Promise<Page> {
   const page = await ctx.newPage();
   await page.goto(`${CLASSROOM}/u/0/h`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -42,7 +44,7 @@ export async function ensureGoogleSession(
   if (isClassroom(page.url())) return page;
 
   if (!creds.email || !creds.password) {
-    throw new GoogleLoginError(`сесії Google немає, а GOOGLE_EMAIL / GOOGLE_PASSWORD не задані. ${SESSION_HINT}`);
+    throw new GoogleLoginError('сесії Google немає: введіть email і пароль Google дитини на сторінці налаштувань.');
   }
   log('Google: вхід email і паролем');
 
@@ -75,7 +77,7 @@ export async function ensureGoogleSession(
     }
     if (/Wrong password|Неправильний пароль|Couldn.t find your Google Account|Не вдалося знайти/i.test(body)) {
       await debug.capture(page, 'google-wrong-credentials', { mask: ['input[type="password"]'] });
-      throw new GoogleLoginError('Google: неправильний email або пароль (GOOGLE_EMAIL / GOOGLE_PASSWORD).');
+      throw new GoogleLoginError('Google: неправильний email або пароль. Виправте їх на сторінці налаштувань.');
     }
     if (!passwordSent && (await password.count()) > 0) {
       await password.first().fill(creds.password);
@@ -92,10 +94,11 @@ export async function ensureGoogleSession(
     if (/\/challenge\//.test(url) && !announcedChallenge) {
       announcedChallenge = true;
       await debug.capture(page, 'google-challenge');
-      log(
+      const text =
         'Google просить підтвердити вхід. Відкрийте телефон дитини (сповіщення Google / Gmail) і натисніть «Так, це я». ' +
-          `Робот чекає до ${Math.round(CHALLENGE_WAIT_MS / 60000)} хв.`,
-      );
+        `Робот чекає до ${Math.round(CHALLENGE_WAIT_MS / 60000)} хв.`;
+      log(text);
+      await notify(`${text} Після цього вхід зберігається, і просити більше не буде.`);
     }
   }
   await debug.capture(page, 'google-timeout', { mask: ['input[type="password"]'] });

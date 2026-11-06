@@ -171,6 +171,8 @@ async function doCheck(env: CheckEnv, opts: CheckOptions, now: Date): Promise<Se
   ]);
   const settings: Settings = { ...appSettings, demoMode: false };
   const robot = parse<Snapshot>(robotRaw);
+  const vaultNames = await vault.list();
+  const robotGoogle = !!vaultNames.google_session || (!!vaultNames.google_email && !!vaultNames.google_password);
   const robotFresh = robot && now.getTime() - Date.parse(robot.generatedAt) < ROBOT_STALE_HOURS * 3_600_000 ? robot : null;
   const prev = parse<Snapshot>(prevSnapRaw);
   const state: ServerState = parse<ServerState>(stateRaw) ?? { check: { knownAssignmentIds: [], alertedIds: [] }, ready: {} };
@@ -226,6 +228,14 @@ async function doCheck(env: CheckEnv, opts: CheckOptions, now: Date): Promise<Se
   } else if (robotFresh?.classroom) {
     sources.classroom = 'robot';
     classroom = robotFresh.classroom;
+  } else if (robotGoogle) {
+    // Google Клас читає робот (пароль або сесія на сторінці), але даних немає.
+    sources.classroom = 'robot';
+    errors.classroom = robotFresh?.errors.classroom
+      ? `Робот: ${robotFresh.errors.classroom}`
+      : robot
+        ? `Робот давно не передавав даних (останній раз ${robot.generatedAt.slice(0, 16).replace('T', ' ')} UTC). Перевірте вкладку Actions → Robot у GitHub.`
+        : 'Робот ще не запускався. Запустіть його на сторінці налаштувань (картка «Хмарний робот») або зачекайте до наступної години.';
   } else {
     errors.classroom = robotFresh?.errors.classroom ?? NOT_CONFIGURED.classroom;
   }

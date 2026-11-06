@@ -7,7 +7,7 @@
  *   POST   /api/auth/logout
  *   GET    /api/overview                         налаштування, діти, чати, стан робота
  *   PUT    /api/settings     { …часткові… }
- *   PUT    /api/credentials  { eschool_login?, eschool_password?, google_session? }  (null — видалити)
+ *   PUT    /api/credentials  { eschool_login?, eschool_password?, google_session?, google_email?, google_password? }  (null — видалити)
  *   POST   /api/children     { name, class_name }
  *   DELETE /api/children/:id
  *   POST   /api/children/:id/link-code           → { code, expires_at }
@@ -22,6 +22,7 @@
  * Робот (Authorization: Bearer hex(HMAC(TELEGRAM_BOT_TOKEN, ROBOT_TOKEN_LABEL))):
  *   GET    /robot/config                         логіни, сесія Google, пам'ять, налаштування
  *   POST   /robot/report     { snapshot, state }
+ *   POST   /robot/notify     { text }            повідомлення адміністраторам (наприклад, «підтвердіть вхід у Google»)
  */
 import { EschoolLoginError, eschoolLogin } from '../../src/providers/eschool/client';
 import { authenticate, logout, pollLogin, startLogin, type Session } from './auth';
@@ -31,7 +32,7 @@ import { callbackUrl, loadGoogle, saveGoogle, startGoogleLogin } from './google'
 import { bearerMatches, robotToken } from './crypto';
 import { createLinkCode, findOrCreateChild } from './linkCodes';
 import { getJson, getSettings, setJson, validateSettingsPatch, type RobotStatus } from './settings';
-import { getBotUsername } from './telegram';
+import { getBotUsername, sendMessage } from './telegram';
 import { Vault } from './vault';
 
 export type ApiEnv = CheckEnv;
@@ -168,6 +169,13 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
         password = (v as string | null) || null;
       } else if (k === 'google_session') {
         await vault.set('google_session', v === null || v === '' ? null : parseGoogleSession(v));
+      } else if (k === 'google_email') {
+        const email = clean(v, 200, k);
+        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'google_email: некоректний email');
+        await vault.set('google_email', email ? email.toLowerCase() : null);
+      } else if (k === 'google_password') {
+        if (v !== null && (typeof v !== 'string' || v.length > 200)) throw new HttpError(400, `${k}: до 200 символів`);
+        await vault.set('google_password', (v as string | null) || null);
       } else {
         throw new HttpError(400, `невідоме поле ${k}`);
       }
@@ -366,6 +374,8 @@ async function overview(env: ApiEnv, session: Session, origin: string) {
       eschool_login: login ? maskLogin(login) : null,
       eschool_password: !!vaultList.eschool_password,
       google_session_updated_at: vaultList.google_session ?? null,
+      google_email: vaultList.google_email ? await vault.get('google_email') : null,
+      google_password: !!vaultList.google_password,
     },
     google: {
       client_id: google?.client_id ?? null,
@@ -388,20 +398,23 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImp
   const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
 
   if (path === '/robot/config' && request.method === 'GET') {
-    const [login, password, google, state, list, oauth] = await Promise.all([
+    const [login, password, google, state, list, oauth, gEmail, gPassword] = await Promise.all([
       vault.get('eschool_login'),
       vault.get('eschool_password'),
       vault.get('google_session'),
       vault.get('robot_state'),
       vault.list(),
       loadGoogle(vault),
+      vault.get('google_email'),
+      vault.get('google_password'),
     ]);
-    // Робот потрібен лише для Google Класу через сесію браузера. Єдину школу
-    // і Google (через вхід Google на сторінці) Worker читає сам.
-    const skip = !google || !!oauth?.refresh_token;
+    // Робот потрібен лише для Google Класу через браузер (пароль або сесія).
+    // Єдину школу і Google (через вхід Google на сторінці) Worker читає сам.
+    const skip = !!oauth?.refresh_token || (!google && !(gEmail && gPassword));
     return reply(request, {
       ok: true,
       skip,
+      google: gEmail && gPassword ? { email: gEmail, password: gPassword } : null,
       eschool: login && password ? { login, password } : null,
       google_session: google ? JSON.parse(google) : null,
       google_session_updated_at: list.google_session ?? null,
@@ -437,6 +450,16 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImp
     // Нові дані робота → перевірка і сповіщення в Telegram.
     const r = await runServerCheck(env, { reason: 'robot', fetch: fetchImpl });
     return reply(request, { ok: true, alerts: r.status?.alerts ?? 0 });
+  }
+
+  if (path === '/robot/notify' && request.method === 'POST') {
+    const text = clean((await readBody(request)).text, 1000, 'text');
+    if (!text) throw new HttpError(400, 'text: порожньо');
+    const { results } = await db
+      .prepare('SELECT a.chat_id FROM admins a JOIN telegram_chats t ON t.chat_id = a.chat_id WHERE t.is_active = 1')
+      .all<{ chat_id: number }>();
+    for (const r of results) await sendMessage({ db, botToken: env.TELEGRAM_BOT_TOKEN, fetch: fetchImpl }, r.chat_id, `🤖 ${text}`);
+    return reply(request, { ok: true, sent: results.length });
   }
 
   return reply(request, { ok: false, error: 'not found' }, 404);

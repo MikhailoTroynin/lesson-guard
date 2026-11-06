@@ -206,6 +206,21 @@ describe('API сторінки налаштувань', () => {
       state: null,
       skip: true, // без сесії Google робот не потрібен
     });
+    // Email і пароль Google для робота: робот потрібен і отримує їх.
+    await call('PUT', '/api/credentials', { google_email: 'Kid@School.ua', google_password: 'g-pass' }, token);
+    expect(JSON.stringify(db.rows('SELECT * FROM vault'))).not.toContain('g-pass');
+    const cfg2 = await robot('GET', '/robot/config', undefined, rt);
+    expect(cfg2.body).toMatchObject({ skip: false, google: { email: 'kid@school.ua', password: 'g-pass' } });
+    expect((await call('GET', '/api/overview', undefined, token)).body.credentials).toMatchObject({
+      google_email: 'kid@school.ua',
+      google_password: true,
+    });
+    // Робот просить підтвердити вхід → повідомлення адміністратору.
+    const before = tg.sent.length;
+    expect((await robot('POST', '/robot/notify', { text: 'Підтвердіть вхід' }, rt)).body).toMatchObject({ sent: 1 });
+    expect(tg.sent.slice(before)).toEqual([expect.objectContaining({ chat_id: ME, text: '🤖 Підтвердіть вхід' })]);
+    expect((await robot('POST', '/robot/notify', { text: 'x' })).status).toBe(401);
+
     // Єдину школу Worker тепер читає сам; щоб дані йшли від робота, прибираємо логін.
     await call('PUT', '/api/credentials', { eschool_login: null, eschool_password: null }, token);
 

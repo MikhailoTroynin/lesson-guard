@@ -322,8 +322,7 @@ function GoogleSessionCard({ overview, refresh }: { overview: Overview; refresh:
         <Text style={[styles.cardTitle, { flex: 1 }]}>Робот: сесія Google</Text>
       </View>
       <Text style={styles.hint}>
-        Запасний спосіб, лише якщо вхід через Google вище не підходить (наприклад, школа блокує сторонні застосунки).
-        Потрібен комп’ютер з Node.js.{' '}
+        Лише якщо робот не може увійти паролем (Google відхиляє вхід з браузера робота). Потрібен комп’ютер з Node.js.{' '}
         {updated
           ? `Сесію Google збережено ${fmtTime(updated)}. Робот сам її продовжує; нова потрібна, лише якщо Google «розлогінить» робота.`
           : 'Google не пускає робота входити паролем, тому один раз увійти в акаунт дитини треба на комп’ютері командою npm run robot:session — вона видасть рядок, який треба вставити сюди.'}
@@ -499,6 +498,88 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
   );
 }
 
+function RobotGoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
+  const cur = overview.credentials;
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const saved = !!cur.google_email && !!cur.google_password;
+  const s = overview.server;
+  const robotError = s?.sources.classroom === 'robot' ? s.errors.classroom : undefined;
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    setDone('');
+    try {
+      const patch: { google_email?: string; google_password?: string } = {};
+      if (email.trim()) patch.google_email = email.trim();
+      if (password) patch.google_password = password;
+      await api.putCredentials(patch);
+      setEmail('');
+      setPassword('');
+      setDone('Збережено. Запустіть робота кнопкою нижче (або зачекайте до наступної години).');
+      await refresh();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forget = async () => {
+    if (!confirmAction('Видалити email і пароль Google дитини з сервера?')) return;
+    try {
+      await api.putCredentials({ google_email: null, google_password: null });
+      await refresh();
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
+
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={saved ? (robotError ? colors.red : colors.green) : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас через робота</Text>
+        <Tag label="якщо школа блокує" fg={colors.neutral800} bg={colors.neutral100} />
+      </View>
+      <Text style={styles.hint}>
+        {saved
+          ? `Збережено: ${cur.google_email}, пароль — так. Робот щогодини входить у Google Клас у GitHub Actions; вхід запам’ятовується, тож пароль потрібен лише вперше і коли Google «розлогінить».`
+          : 'Якщо «Увійти через Google» показує «Доступ заблоковано: адміністратор вашого закладу…», введіть тут email і пароль Google ДИТИНИ. Робот (браузер у GitHub Actions) сам увійде в Google Клас — на вашому комп’ютері нічого запускати не треба. Зберігаються на сервері в зашифрованому вигляді.'}
+      </Text>
+      <Text style={styles.hint}>
+        Якщо Google попросить підтвердити вхід («Це ви?»), бот напише вам у Telegram — натисніть «Так» на телефоні дитини протягом 4 хвилин.
+      </Text>
+      <Field label="Email Google дитини" value={email} onChangeText={setEmail} placeholder={cur.google_email ?? 'name@school.ua'} autoComplete="username" />
+      <Field
+        label="Пароль Google"
+        value={password}
+        onChangeText={setPassword}
+        placeholder={cur.google_password ? 'Збережено — впишіть, щоб змінити' : 'Пароль'}
+        secure
+        autoComplete="password"
+      />
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Btn
+          variant="primary"
+          title="Зберегти"
+          onPress={save}
+          loading={busy}
+          disabled={saved ? !email.trim() && !password : !email.trim() || !password}
+          style={{ flex: 1, minHeight: 42 }}
+        />
+        {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 42 }} />}
+      </View>
+      {done ? <Text style={styles.hint}>{done}</Text> : null}
+      <ErrorText error={error || robotError || ''} />
+    </Surface>
+  );
+}
+
 function ServerCheckCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
   const { sync } = useAppState();
   const [busy, setBusy] = useState(false);
@@ -561,7 +642,7 @@ function RobotCard({ overview, refresh }: { overview: Overview; refresh: () => P
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
         <Dot color={!r ? colors.neutral400 : hasErrors ? colors.red : colors.green} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот (необов’язково)</Text>
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот</Text>
       </View>
       <Text style={styles.hint}>
         {r
@@ -949,9 +1030,8 @@ function AdvancedSection({ data, refresh }: { data: Overview | null; refresh: ()
           <SubjectsSection />
           {data && (
             <>
-              <Kicker>Запасний спосіб для Google Класу</Kicker>
+              <Kicker>Ще один запасний спосіб для Google Класу</Kicker>
               <GoogleSessionCard overview={data} refresh={refresh} />
-              <RobotCard overview={data} refresh={refresh} />
             </>
           )}
           <Mono style={{ fontSize: 10.5 }}>Сервер: {WORKER_URL}</Mono>
@@ -977,6 +1057,10 @@ export default function SettingsScreen() {
         <Section title="Акаунти дитини">
           <EschoolCard overview={data} refresh={refresh} />
           <GoogleCard overview={data} refresh={refresh} />
+          {!data.google?.connected && <RobotGoogleCard overview={data} refresh={refresh} />}
+          {!data.google?.connected && (data.credentials.google_password || data.robot) && (
+            <RobotCard overview={data} refresh={refresh} />
+          )}
           <ServerCheckCard overview={data} refresh={refresh} />
         </Section>
       )}

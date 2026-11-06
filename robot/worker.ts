@@ -16,6 +16,8 @@ export const DEFAULT_WORKER_URL = 'https://lesson-guard.mihajlotrojnin.workers.d
 export interface RobotConfig {
   eschool: { login: string; password: string } | null;
   google_session: StorageState | null;
+  /** Email і пароль Google дитини зі сторінки налаштувань. */
+  google?: { email: string; password: string } | null;
   google_session_updated_at: string | null;
   /** true — Worker усе читає сам, робот не потрібен. */
   skip?: boolean;
@@ -47,6 +49,11 @@ export class WorkerClient {
 
   config(): Promise<RobotConfig> {
     return this.call<RobotConfig>('GET', '/robot/config');
+  }
+
+  /** Повідомлення адміністраторам у Telegram (не кидає помилок). */
+  async notify(text: string): Promise<void> {
+    await this.call('POST', '/robot/notify', { text }).catch((e) => console.warn(`notify: ${e}`));
   }
 
   async report(snapshot: RobotSnapshot, state: RobotState): Promise<void> {

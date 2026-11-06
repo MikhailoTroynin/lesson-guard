@@ -170,6 +170,32 @@ describe('перевірка на сервері → Telegram', () => {
     expect(errs.map((m) => m.chat_id)).toEqual([ADMIN]);
   });
 
+  it('Google через робота: без даних від робота — помилка адміністратору', async () => {
+    await vault().set('google_email', 'kid@school.ua');
+    await vault().set('google_password', 'p');
+    const { status } = await runServerCheck(env(), { reason: 'cron', fetch: net.fetch, now: now(9) });
+    expect(status!.sources.classroom).toBe('robot');
+    expect(status!.errors.classroom).toContain('Робот ще не запускався');
+    expect(net.sent.filter((m) => m.text.includes('Робот ще не запускався')).map((m) => m.chat_id)).toEqual([ADMIN]);
+
+    // Робот передав дані → «знову читається» і перший підсумок.
+    net.sent.length = 0;
+    await vault().set(
+      'robot_snapshot',
+      JSON.stringify({
+        version: 1,
+        generatedAt: now(10).toISOString(),
+        classroom: { assignments: [{ id: 'a1', courseId: 'c', courseName: 'Фізика', title: 'Лаб 1', createdAt: now(8).toISOString() }], submissions: [] },
+        grades: null,
+        errors: {},
+      }),
+    );
+    await runServerCheck(env(), { reason: 'robot', fetch: net.fetch, now: now(10) });
+    const texts = net.sent.filter((m) => m.chat_id === ADMIN).map((m) => m.text);
+    expect(texts.some((t) => t.includes('Google Клас підключено'))).toBe(true);
+    expect(texts.some((t) => t.includes('Google Клас знову читається'))).toBe(true);
+  });
+
   it('ліміт запитів: курси оновлюються по черзі, дані не губляться', async () => {
     await connectGoogle();
     net.world.assignments = [{ id: 'w1', title: 'T', creationTime: '2026-11-05T08:00:00Z' }];

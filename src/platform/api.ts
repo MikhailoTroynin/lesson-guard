@@ -61,7 +61,13 @@ export interface Overview {
     is_group: boolean;
     is_admin: boolean;
   }[];
-  credentials: { eschool_login: string | null; eschool_password: boolean; google_session_updated_at: string | null };
+  credentials: {
+    eschool_login: string | null;
+    eschool_password: boolean;
+    google_session_updated_at: string | null;
+    google_email?: string | null;
+    google_password?: boolean;
+  };
   google: GoogleInfo;
   server: ServerStatus | null;
   robot: RobotStatus | null;
@@ -121,7 +127,13 @@ export const api = {
   logout: () => call('POST', '/api/auth/logout'),
   overview: () => call<Overview & { ok: true }>('GET', '/api/overview'),
   putSettings: (patch: Partial<ServerSettings>) => call<{ settings: ServerSettings }>('PUT', '/api/settings', patch),
-  putCredentials: (patch: { eschool_login?: string | null; eschool_password?: string | null; google_session?: string | null }) =>
+  putCredentials: (patch: {
+    eschool_login?: string | null;
+    eschool_password?: string | null;
+    google_session?: string | null;
+    google_email?: string | null;
+    google_password?: string | null;
+  }) =>
     call<{ warning?: string }>('PUT', '/api/credentials', patch),
   check: () => call<{ busy: boolean; server: ServerStatus | null; text: string }>('POST', '/api/check'),
   putGoogleClient: (clientId: string, clientSecret: string) =>
