@@ -415,6 +415,7 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImp
       ok: true,
       skip,
       google: gEmail && gPassword ? { email: gEmail, password: gPassword } : null,
+      google_updated_at: gPassword ? (list.google_password ?? null) : null,
       eschool: login && password ? { login, password } : null,
       google_session: google ? JSON.parse(google) : null,
       google_session_updated_at: list.google_session ?? null,

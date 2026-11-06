@@ -8,7 +8,11 @@ export const CLASSROOM = 'https://classroom.google.com';
 const CHALLENGE_WAIT_MS = 4 * 60_000;
 
 export class GoogleLoginError extends Error {
-  constructor(message: string) {
+  /** true — повтор з тими самими даними нічого не змінить (Google відхилив / неправильний пароль). */
+  constructor(
+    message: string,
+    readonly final = false,
+  ) {
     super(message);
     this.name = 'GoogleLoginError';
   }
@@ -73,11 +77,14 @@ export async function ensureGoogleSession(
 
     if (/signin\/rejected|may not be secure|небезпечн|незахищен|Не вдається ввійти|Couldn.t sign you in/i.test(url + body)) {
       await debug.capture(page, 'google-rejected');
-      throw new GoogleLoginError(`Google відхилив вхід з браузера робота. ${SESSION_HINT}`);
+      throw new GoogleLoginError(
+        `Google не пускає автоматизований браузер робота входити паролем («цей браузер може бути небезпечним»). ${SESSION_HINT}`,
+        true,
+      );
     }
     if (/Wrong password|Неправильний пароль|Couldn.t find your Google Account|Не вдалося знайти/i.test(body)) {
       await debug.capture(page, 'google-wrong-credentials', { mask: ['input[type="password"]'] });
-      throw new GoogleLoginError('Google: неправильний email або пароль. Виправте їх на сторінці налаштувань.');
+      throw new GoogleLoginError('Google: неправильний email або пароль. Виправте їх на сторінці налаштувань.', true);
     }
     if (!passwordSent && (await password.count()) > 0) {
       await password.first().fill(creds.password);

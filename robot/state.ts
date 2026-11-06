@@ -8,6 +8,8 @@ export interface RobotState {
   storageState?: StorageState;
   /** Коли збережену на сторінці сесію Google уже застосовано (updated_at із Worker'а). */
   sessionAppliedAt?: string;
+  /** Google відхилив вхід паролем для цих даних (google_updated_at) — не пробуємо знову, поки їх не змінять. */
+  googleRejected?: { for: string; error: string };
   items: Record<string, ItemMemo>;
 }
 

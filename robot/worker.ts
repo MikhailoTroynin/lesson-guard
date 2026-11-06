@@ -18,6 +18,8 @@ export interface RobotConfig {
   google_session: StorageState | null;
   /** Email і пароль Google дитини зі сторінки налаштувань. */
   google?: { email: string; password: string } | null;
+  /** Коли на сторінці востаннє змінили пароль Google. */
+  google_updated_at?: string | null;
   google_session_updated_at: string | null;
   /** true — Worker усе читає сам, робот не потрібен. */
   skip?: boolean;
