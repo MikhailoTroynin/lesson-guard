@@ -36,7 +36,8 @@
     "test": "vitest run",
     "export:web": "expo export -p web",
     "robot": "tsx robot/run.ts",
-    "robot:session": "tsx robot/session.ts"
+    "robot:session": "tsx robot/session.ts",
+    "robot:remote-login": "tsx robot/remote-login.ts"
   },
   "private": true
 }

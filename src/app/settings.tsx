@@ -12,6 +12,7 @@ import { colors, fonts, TAB_BAR_SPACE } from '../ui/theme';
 const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1';
 const REPO = 'https://github.com/MikhailoTroynin/lesson-guard';
 const ROBOT_WORKFLOW_URL = `${REPO}/actions/workflows/robot.yml`;
+const GOOGLE_LOGIN_WORKFLOW_URL = `${REPO}/actions/workflows/google-login.yml`;
 const SESSION_HELP_URL = `${REPO}#запасний-спосіб-робот-і-рядок-сесії-google`;
 const GOOGLE_HELP_URL = `${REPO}#google-клас-один-раз-у-google-cloud-console`;
 const GOOGLE_CONSOLE_URL = 'https://console.cloud.google.com/apis/credentials';
@@ -544,7 +545,7 @@ function RobotGoogleCard({ overview, refresh }: { overview: Overview; refresh: (
       <View style={styles.sourceHead}>
         <Dot color={saved ? (robotError ? colors.red : colors.green) : colors.neutral400} />
         <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас через робота</Text>
-        <Tag label="якщо школа блокує" fg={colors.neutral800} bg={colors.neutral100} />
+        <Tag label="часто блокує Google" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
       <Text style={styles.hint}>
         {saved
@@ -576,6 +577,39 @@ function RobotGoogleCard({ overview, refresh }: { overview: Overview; refresh: (
       </View>
       {done ? <Text style={styles.hint}>{done}</Text> : null}
       <ErrorText error={error || robotError || ''} />
+    </Surface>
+  );
+}
+
+function RemoteGoogleLoginCard({ overview }: { overview: Overview }) {
+  const updated = overview.credentials.google_session_updated_at;
+  const s = overview.server;
+  const robotError = s?.sources.classroom === 'robot' ? s.errors.classroom : undefined;
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={updated ? (robotError ? colors.red : colors.green) : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Вхід у Google через віддалений браузер</Text>
+        <Tag label="якщо школа блокує" fg={colors.neutral800} bg={colors.neutral100} />
+      </View>
+      <Text style={styles.hint}>
+        {updated
+          ? `Вхід збережено ${fmtTime(updated)}. Робот щогодини читає Google Клас цією сесією. Повторити вхід треба, лише якщо Google «розлогінить» (бот про це напише).`
+          : 'Для шкільних акаунтів, де «Увійти через Google» заблоковано адміністратором. Нічого не треба встановлювати:'}
+      </Text>
+      <Text style={styles.hint}>
+        1. Натисніть кнопку нижче → на GitHub «Run workflow» → зелена «Run workflow».{'\n'}
+        2. Приблизно за 1–2 хвилини бот надішле вам у Telegram посилання.{'\n'}
+        3. Відкрийте його (можна з телефону) — побачите вікно Chrome. Увійдіть акаунтом ДИТИНИ, як звичайно.{'\n'}
+        4. Коли відкриється Google Клас, вхід збережеться сам, і робот одразу прочитає завдання.
+      </Text>
+      <Btn
+        variant="primary"
+        title={updated ? 'Увійти в Google ще раз' : 'Увійти в Google'}
+        onPress={() => openUrl(GOOGLE_LOGIN_WORKFLOW_URL)}
+        style={{ minHeight: 42 }}
+      />
+      <ErrorText error={robotError || ''} />
     </Surface>
   );
 }
@@ -1030,7 +1064,8 @@ function AdvancedSection({ data, refresh }: { data: Overview | null; refresh: ()
           <SubjectsSection />
           {data && (
             <>
-              <Kicker>Ще один запасний спосіб для Google Класу</Kicker>
+              <Kicker>Інші способи для Google Класу</Kicker>
+              <RobotGoogleCard overview={data} refresh={refresh} />
               <GoogleSessionCard overview={data} refresh={refresh} />
             </>
           )}
@@ -1057,8 +1092,8 @@ export default function SettingsScreen() {
         <Section title="Акаунти дитини">
           <EschoolCard overview={data} refresh={refresh} />
           <GoogleCard overview={data} refresh={refresh} />
-          {!data.google?.connected && <RobotGoogleCard overview={data} refresh={refresh} />}
-          {!data.google?.connected && (data.credentials.google_password || data.robot) && (
+          {!data.google?.connected && <RemoteGoogleLoginCard overview={data} />}
+          {!data.google?.connected && (data.credentials.google_session_updated_at || data.robot) && (
             <RobotCard overview={data} refresh={refresh} />
           )}
           <ServerCheckCard overview={data} refresh={refresh} />

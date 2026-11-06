@@ -59,7 +59,8 @@ async function main(): Promise<number> {
     errors: {},
   };
 
-  const browser = await chromium.launch();
+  // ROBOT_CHANNEL=chrome — справжній Google Chrome (є на раннерах GitHub), той самий, що й під час входу.
+  const browser = await chromium.launch({ channel: env('ROBOT_CHANNEL') });
   const ctx = await browser.newContext({
     storageState: storage as never,
     locale: 'uk-UA',

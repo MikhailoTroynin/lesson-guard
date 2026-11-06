@@ -1,0 +1,75 @@
+name: Google login
+
+# Вхід у Google для робота через віддалений браузер — без нічого на вашому комп'ютері.
+#
+# Запуск: сторінка налаштувань → «Вхід у Google» → Run workflow.
+# Тут піднімається звичайний Google Chrome на віртуальному екрані (Xvfb), до нього —
+# VNC з одноразовим паролем, noVNC (екран у браузері) і тимчасовий тунель Cloudflare.
+# Посилання з паролем бот надсилає адміністраторам у Telegram (у лог воно не потрапляє).
+# Людина сама входить у Google акаунтом дитини; коли відкрився Google Клас, cookies
+# зберігаються на сервері (зашифровано), і одразу запускається робот.
+#
+# Секрет: TELEGRAM_BOT_TOKEN (уже є). Змінна WORKER_URL — необов'язково.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-login
+  cancel-in-progress: true
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Virtual screen, VNC, noVNC
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11vnc novnc websockify fluxbox >/dev/null
+          PW=$(openssl rand -hex 6)
+          echo "::add-mask::$PW"
+          echo "VNC_PASSWORD=$PW" >> "$GITHUB_ENV"
+          Xvfb :99 -screen 0 1280x860x24 >/dev/null 2>&1 &
+          sleep 2
+          DISPLAY=:99 fluxbox >/dev/null 2>&1 &
+          x11vnc -display :99 -passwd "$PW" -forever -shared -localhost -rfbport 5900 -quiet >/dev/null 2>&1 &
+          websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Cloudflare tunnel
+        run: |
+          curl -fsSL -o cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+          # Лог тунелю містить адресу — у вивід кроку він не друкується.
+          ./cloudflared tunnel --no-autoupdate --url http://localhost:6080 > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
+
+      - name: Wait for Google sign-in
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          TUNNEL_LOG: ${{ runner.temp }}/cloudflared.log
+          DISPLAY: ':99'
+        run: npm run robot:remote-login
+
+      - name: Install Chromium deps for the robot
+        run: npx playwright install --with-deps chromium
+
+      - name: Run robot now
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          ROBOT_CHANNEL: chrome
+        run: npm run robot

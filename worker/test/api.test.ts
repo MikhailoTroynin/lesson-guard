@@ -221,6 +221,13 @@ describe('API сторінки налаштувань', () => {
     expect(tg.sent.slice(before)).toEqual([expect.objectContaining({ chat_id: ME, text: '🤖 Підтвердіть вхід' })]);
     expect((await robot('POST', '/robot/notify', { text: 'x' })).status).toBe(401);
 
+    // Сесія з віддаленого входу зберігається (зашифровано) і йде роботу.
+    const session = { cookies: [{ name: 'SID', value: 'secret-cookie', domain: '.google.com', path: '/' }], origins: [] };
+    expect((await robot('POST', '/robot/session', { session }, rt)).status).toBe(200);
+    expect(JSON.stringify(db.rows('SELECT * FROM vault'))).not.toContain('secret-cookie');
+    expect((await robot('GET', '/robot/config', undefined, rt)).body.google_session).toEqual(session);
+    expect((await robot('POST', '/robot/session', { session: { cookies: [] } }, rt)).status).toBe(400);
+
     // Єдину школу Worker тепер читає сам; щоб дані йшли від робота, прибираємо логін.
     await call('PUT', '/api/credentials', { eschool_login: null, eschool_password: null }, token);
 

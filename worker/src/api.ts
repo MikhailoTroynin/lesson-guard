@@ -22,6 +22,7 @@
  * Робот (Authorization: Bearer hex(HMAC(TELEGRAM_BOT_TOKEN, ROBOT_TOKEN_LABEL))):
  *   GET    /robot/config                         логіни, сесія Google, пам'ять, налаштування
  *   POST   /robot/report     { snapshot, state }
+ *   POST   /robot/session    { session }         сесія Google з віддаленого входу (storageState)
  *   POST   /robot/notify     { text }            повідомлення адміністраторам (наприклад, «підтвердіть вхід у Google»)
  */
 import { EschoolLoginError, eschoolLogin } from '../../src/providers/eschool/client';
@@ -453,9 +454,17 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImp
     return reply(request, { ok: true, alerts: r.status?.alerts ?? 0 });
   }
 
+  if (path === '/robot/session' && request.method === 'POST') {
+    // Сесія Google з віддаленого входу (workflow «Google login»).
+    const session = (await readBody(request)).session;
+    await vault.set('google_session', parseGoogleSession(JSON.stringify(session ?? null)));
+    return reply(request, { ok: true });
+  }
+
   if (path === '/robot/notify' && request.method === 'POST') {
-    const text = clean((await readBody(request)).text, 1000, 'text');
-    if (!text) throw new HttpError(400, 'text: порожньо');
+    const raw = (await readBody(request)).text;
+    const text = typeof raw === 'string' ? raw.normalize('NFC').trim() : '';
+    if (!text || text.length > 1500) throw new HttpError(400, 'text: 1–1500 символів');
     const { results } = await db
       .prepare('SELECT a.chat_id FROM admins a JOIN telegram_chats t ON t.chat_id = a.chat_id WHERE t.is_active = 1')
       .all<{ chat_id: number }>();

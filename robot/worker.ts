@@ -53,6 +53,11 @@ export class WorkerClient {
     return this.call<RobotConfig>('GET', '/robot/config');
   }
 
+  /** Зберегти сесію Google (cookies) на сервері — зашифровано. */
+  async saveSession(session: StorageState): Promise<void> {
+    await this.call('POST', '/robot/session', { session });
+  }
+
   /** Повідомлення адміністраторам у Telegram (не кидає помилок). */
   async notify(text: string): Promise<void> {
     await this.call('POST', '/robot/notify', { text }).catch((e) => console.warn(`notify: ${e}`));

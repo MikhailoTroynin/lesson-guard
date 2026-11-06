@@ -51,6 +51,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           WORKER_URL: ${{ vars.WORKER_URL }}
           DEBUG_DIR: ${{ inputs.debug && 'robot-debug' || '' }}
+          ROBOT_CHANNEL: chrome
         run: npm run robot
 
       - name: Encrypt debug screenshots
