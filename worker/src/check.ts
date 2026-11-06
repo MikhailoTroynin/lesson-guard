@@ -14,12 +14,13 @@ import { isBadGrade } from '../../src/core/rules';
 import type { Alert, Assignment, CheckState, Grade, Settings, Submission } from '../../src/core/types';
 import { EschoolGradesProvider } from '../../src/providers/eschool/client';
 import { Budget, collectClassroom, emptyClassroomCache, type ClassroomCache } from './classroom';
-import { GoogleAuthError, googleAccessToken, loadGoogle, PAGE_URL } from './google';
+import type { ActionsEnv } from './actions';
+import { GoogleAuthError, googleAccessToken, loadGoogle, PAGE_URL, type GoogleEnv } from './google';
 import { getJson, getSettings, setJson } from './settings';
 import { sendMessage } from './telegram';
 import { Vault } from './vault';
 
-export interface CheckEnv {
+export interface CheckEnv extends GoogleEnv, ActionsEnv {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
   /** Ліміт зовнішніх запитів на один запуск (безкоштовний тариф Cloudflare — 50). */
@@ -162,7 +163,7 @@ async function doCheck(env: CheckEnv, opts: CheckOptions, now: Date): Promise<Se
     getSettings(db),
     vault.get('eschool_login'),
     vault.get('eschool_password'),
-    loadGoogle(vault),
+    loadGoogle(vault, env),
     vault.get('robot_snapshot'),
     vault.get('check_state'),
     vault.get('classroom_cache'),
@@ -172,7 +173,7 @@ async function doCheck(env: CheckEnv, opts: CheckOptions, now: Date): Promise<Se
   const settings: Settings = { ...appSettings, demoMode: false };
   const robot = parse<Snapshot>(robotRaw);
   const vaultNames = await vault.list();
-  const robotGoogle = !!vaultNames.google_session || (!!vaultNames.google_email && !!vaultNames.google_password);
+  const robotGoogle = !!vaultNames.google_session;
   const robotFresh = robot && now.getTime() - Date.parse(robot.generatedAt) < ROBOT_STALE_HOURS * 3_600_000 ? robot : null;
   const prev = parse<Snapshot>(prevSnapRaw);
   const state: ServerState = parse<ServerState>(stateRaw) ?? { check: { knownAssignmentIds: [], alertedIds: [] }, ready: {} };
@@ -229,13 +230,13 @@ async function doCheck(env: CheckEnv, opts: CheckOptions, now: Date): Promise<Se
     sources.classroom = 'robot';
     classroom = robotFresh.classroom;
   } else if (robotGoogle) {
-    // Google Клас читає робот (пароль або сесія на сторінці), але даних немає.
+    // Google Клас читає робот (сесія з віддаленого входу), але даних ще немає.
     sources.classroom = 'robot';
     errors.classroom = robotFresh?.errors.classroom
       ? `Робот: ${robotFresh.errors.classroom}`
       : robot
         ? `Робот давно не передавав даних (останній раз ${robot.generatedAt.slice(0, 16).replace('T', ' ')} UTC). Перевірте вкладку Actions → Robot у GitHub.`
-        : 'Робот ще не запускався. Запустіть його на сторінці налаштувань (картка «Хмарний робот») або зачекайте до наступної години.';
+        : 'Робот ще не запускався. Натисніть «Запустити робота» на сторінці налаштувань або зачекайте до наступної години.';
   } else {
     errors.classroom = robotFresh?.errors.classroom ?? NOT_CONFIGURED.classroom;
   }

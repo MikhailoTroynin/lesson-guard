@@ -15,11 +15,8 @@ export const DEFAULT_WORKER_URL = 'https://lesson-guard.mihajlotrojnin.workers.d
 
 export interface RobotConfig {
   eschool: { login: string; password: string } | null;
+  /** Cookies Google з віддаленого входу (або з `npm run robot:session`). */
   google_session: StorageState | null;
-  /** Email і пароль Google дитини зі сторінки налаштувань. */
-  google?: { email: string; password: string } | null;
-  /** Коли на сторінці востаннє змінили пароль Google. */
-  google_updated_at?: string | null;
   google_session_updated_at: string | null;
   /** true — Worker усе читає сам, робот не потрібен. */
   skip?: boolean;

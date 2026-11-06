@@ -171,8 +171,7 @@ describe('перевірка на сервері → Telegram', () => {
   });
 
   it('Google через робота: без даних від робота — помилка адміністратору', async () => {
-    await vault().set('google_email', 'kid@school.ua');
-    await vault().set('google_password', 'p');
+    await vault().set('google_session', JSON.stringify({ cookies: [{ name: 'SID' }], origins: [] }));
     const { status } = await runServerCheck(env(), { reason: 'cron', fetch: net.fetch, now: now(9) });
     expect(status!.sources.classroom).toBe('robot');
     expect(status!.errors.classroom).toContain('Робот ще не запускався');

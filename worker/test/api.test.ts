@@ -206,15 +206,8 @@ describe('API сторінки налаштувань', () => {
       state: null,
       skip: true, // без сесії Google робот не потрібен
     });
-    // Email і пароль Google для робота: робот потрібен і отримує їх.
-    await call('PUT', '/api/credentials', { google_email: 'Kid@School.ua', google_password: 'g-pass' }, token);
-    expect(JSON.stringify(db.rows('SELECT * FROM vault'))).not.toContain('g-pass');
-    const cfg2 = await robot('GET', '/robot/config', undefined, rt);
-    expect(cfg2.body).toMatchObject({ skip: false, google: { email: 'kid@school.ua', password: 'g-pass' } });
-    expect((await call('GET', '/api/overview', undefined, token)).body.credentials).toMatchObject({
-      google_email: 'kid@school.ua',
-      google_password: true,
-    });
+    // Пароль Google сторінка більше не приймає — лише сесія.
+    expect((await call('PUT', '/api/credentials', { google_email: 'kid@school.ua', google_password: 'x' }, token)).status).toBe(400);
     // Робот просить підтвердити вхід → повідомлення адміністратору.
     const before = tg.sent.length;
     expect((await robot('POST', '/robot/notify', { text: 'Підтвердіть вхід' }, rt)).body).toMatchObject({ sent: 1 });
@@ -225,7 +218,8 @@ describe('API сторінки налаштувань', () => {
     const session = { cookies: [{ name: 'SID', value: 'secret-cookie', domain: '.google.com', path: '/' }], origins: [] };
     expect((await robot('POST', '/robot/session', { session }, rt)).status).toBe(200);
     expect(JSON.stringify(db.rows('SELECT * FROM vault'))).not.toContain('secret-cookie');
-    expect((await robot('GET', '/robot/config', undefined, rt)).body.google_session).toEqual(session);
+    const cfg2 = await robot('GET', '/robot/config', undefined, rt);
+    expect(cfg2.body).toMatchObject({ skip: false, google_session: session }); // є сесія → робот потрібен
     expect((await robot('POST', '/robot/session', { session: { cookies: [] } }, rt)).status).toBe(400);
 
     // Єдину школу Worker тепер читає сам; щоб дані йшли від робота, прибираємо логін.
@@ -253,6 +247,59 @@ describe('API сторінки налаштувань', () => {
     expect(o.server).toMatchObject({ reason: 'robot', sources: { eschool: 'robot', classroom: 'robot' }, errors: {} });
     const snap = (await call('GET', '/api/snapshot', undefined, token)).body.snapshot;
     expect(snap).toMatchObject({ classroom: snapshot.classroom, grades: snapshot.grades, errors: {} });
+  });
+  it('OAuth-клієнт із секретів Worker’а: на сторінці нічого вводити не треба', async () => {
+    const { token } = await login();
+    const withClient = { ...env(), GOOGLE_CLIENT_ID: 'srv.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'srv-secret' };
+    const callEnv = async (method: string, path: string, body?: unknown) => {
+      const res = await handleApi(
+        new Request(`https://w${path}`, {
+          method,
+          headers: { origin: ORIGIN, authorization: `Bearer ${token}` },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+        withClient,
+        tg.fetch,
+      );
+      return { status: res!.status, body: (await res!.json()) as any };
+    };
+    // Без секретів — клієнта немає, вхід не почати.
+    expect((await call('GET', '/api/overview', undefined, token)).body.google).toMatchObject({ client_id: null, client_source: null });
+    expect((await call('POST', '/api/google/start', undefined, token)).status).toBe(400);
+
+    const o = await callEnv('GET', '/api/overview');
+    expect(o.body.google).toMatchObject({ client_id: 'srv.apps.googleusercontent.com', client_source: 'server', has_secret: true, connected: false });
+    expect(JSON.stringify(o.body)).not.toContain('srv-secret');
+    const start = await callEnv('POST', '/api/google/start');
+    expect(start.body.url).toContain('client_id=srv.apps.googleusercontent.com');
+    // Серверний клієнт зі сторінки не змінити.
+    expect((await callEnv('PUT', '/api/google/client', { client_id: 'x.apps.googleusercontent.com', client_secret: 's' })).status).toBe(400);
+  });
+
+  it('запуск workflow GitHub: без токена — посилання, з токеном — workflow_dispatch', async () => {
+    const { token } = await login();
+    const r1 = await call('POST', '/api/actions/run', { workflow: 'google-login' }, token);
+    expect(r1.body).toMatchObject({ started: false, url: 'https://github.com/MikhailoTroynin/lesson-guard/actions/workflows/google-login.yml' });
+    expect((await call('POST', '/api/actions/run', { workflow: 'rm -rf' }, token)).status).toBe(400);
+
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const gh = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+    const res = await handleApi(
+      new Request('https://w/api/actions/run', {
+        method: 'POST',
+        headers: { origin: ORIGIN, authorization: `Bearer ${token}` },
+        body: JSON.stringify({ workflow: 'robot' }),
+      }),
+      { ...env(), GH_WORKFLOW_TOKEN: 'ghp_x', GITHUB_REPO: 'Owner/repo' },
+      gh,
+    );
+    expect(((await res!.json()) as any).started).toBe(true);
+    expect(calls[0].url).toBe('https://api.github.com/repos/Owner/repo/actions/workflows/robot.yml/dispatches');
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ ref: 'main' });
+    expect((calls[0].init?.headers as Record<string, string>).authorization).toBe('Bearer ghp_x');
   });
 });
 

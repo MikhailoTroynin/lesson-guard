@@ -42,6 +42,8 @@ export interface ServerStatus {
 
 export interface GoogleInfo {
   client_id: string | null;
+  /** 'server' — клієнт із секретів Worker'а (нічого вводити не треба), 'page' — введений на сторінці. */
+  client_source?: 'server' | 'page' | null;
   has_secret: boolean;
   connected: boolean;
   email: string | null;
@@ -65,8 +67,6 @@ export interface Overview {
     eschool_login: string | null;
     eschool_password: boolean;
     google_session_updated_at: string | null;
-    google_email?: string | null;
-    google_password?: boolean;
   };
   google: GoogleInfo;
   server: ServerStatus | null;
@@ -131,15 +131,15 @@ export const api = {
     eschool_login?: string | null;
     eschool_password?: string | null;
     google_session?: string | null;
-    google_email?: string | null;
-    google_password?: string | null;
-  }) =>
-    call<{ warning?: string }>('PUT', '/api/credentials', patch),
+  }) => call<{ warning?: string }>('PUT', '/api/credentials', patch),
   check: () => call<{ busy: boolean; server: ServerStatus | null; text: string }>('POST', '/api/check'),
   putGoogleClient: (clientId: string, clientSecret: string) =>
     call('PUT', '/api/google/client', { client_id: clientId, client_secret: clientSecret }),
   googleStart: () => call<{ url: string }>('POST', '/api/google/start'),
   googleDisconnect: () => call('DELETE', '/api/google'),
+  /** Запустити workflow GitHub; started=false — треба натиснути «Run workflow» за url. */
+  runWorkflow: (workflow: 'google-login' | 'robot') =>
+    call<{ started: boolean; url: string; error?: string }>('POST', '/api/actions/run', { workflow }),
   addChild: (name: string, className: string) =>
     call<{ id: number; created: boolean }>('POST', '/api/children', { name, class_name: className || null }),
   deleteChild: (id: number) => call('DELETE', `/api/children/${id}`),

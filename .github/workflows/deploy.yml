@@ -11,6 +11,11 @@ name: Deploy Worker
 # Потрібно в Settings → Secrets and variables → Actions:
 #   secrets:   CLOUDFLARE_API_TOKEN, TELEGRAM_BOT_TOKEN
 #   variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID
+# Необов'язкові секрети (якщо задані — передаються Worker'у після деплою):
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET — спільний OAuth-клієнт Google: тоді на сторінці
+#                                            лишається лише кнопка «Увійти через Google»;
+#   GH_WORKFLOW_TOKEN — fine-grained PAT (Actions: Read and write) для цього репозиторію:
+#                       тоді сторінка сама запускає workflow «Google login» і «Robot».
 #
 # Після деплою вебхук Telegram реєструється автоматично (worker/scripts/set-webhook.mjs);
 # секрет вебхука виводиться з токена бота, окремий secret не потрібен.
@@ -116,6 +121,33 @@ jobs:
           secrets: |
             TELEGRAM_BOT_TOKEN
           command: deploy
+
+      # Необов'язкові секрети: передаємо лише ті, що задані (порожні wrangler не приймає).
+      - name: Collect optional secrets
+        id: optional
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GH_WORKFLOW_TOKEN: ${{ secrets.GH_WORKFLOW_TOKEN }}
+          OUT: ${{ runner.temp }}/optional-secrets.json
+        run: |
+          node -e '
+            const names = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GH_WORKFLOW_TOKEN"];
+            const present = Object.fromEntries(names.filter((n) => process.env[n]?.trim()).map((n) => [n, process.env[n].trim()]));
+            require("fs").writeFileSync(process.env.OUT, JSON.stringify(present));
+            console.log("Необов’язкові секрети:", Object.keys(present).join(", ") || "немає");
+            require("fs").appendFileSync(process.env.GITHUB_OUTPUT, `any=${Object.keys(present).length ? "true" : "false"}\n`);
+          '
+
+      - name: Upload optional secrets
+        if: steps.optional.outputs.any == 'true'
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ env.WRANGLER_VERSION }}
+          workingDirectory: worker
+          command: secret bulk ${{ runner.temp }}/optional-secrets.json
 
       - name: Register Telegram webhook
         env:

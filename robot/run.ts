@@ -14,7 +14,7 @@ import { fetchClassroom } from './classroom';
 import { kyivDay } from './dates';
 import { Debug } from './debug';
 import { fetchEschoolGrades } from './eschool';
-import { ensureGoogleSession, GoogleLoginError } from './google';
+import { ensureGoogleSession } from './google';
 import { mergeStorage, type RobotState, type StorageState } from './state';
 import { DEFAULT_WORKER_URL, WorkerClient } from './worker';
 
@@ -88,21 +88,9 @@ async function main(): Promise<number> {
     }
 
     // ── Google Клас ──
-    const gEmail = config.google?.email ?? env('GOOGLE_EMAIL');
-    const gPassword = config.google?.password ?? env('GOOGLE_PASSWORD');
-    const rejected =
-      !storage && state.googleRejected && state.googleRejected.for === (config.google_updated_at ?? 'env')
-        ? state.googleRejected
-        : undefined;
-    if (rejected) {
-      // Google уже відхилив вхід цими даними — не стукаємо щогодини (і не шлемо лист про червоний запуск).
-      snapshot.errors.classroom = `${rejected.error} (не пробую знову, поки не зміните email/пароль на сторінці)`;
-      log(`Google Клас: ${snapshot.errors.classroom}`);
-    } else if (gEmail || storage) {
+    if (storage) {
       try {
-        const page = await ensureGoogleSession(ctx, { email: gEmail, password: gPassword }, debug, log, (text) =>
-          worker.notify(text),
-        );
+        const page = await ensureGoogleSession(ctx, debug, log);
         snapshot.classroom = await fetchClassroom(ctx, page, state.items, now, debug, log);
         log(
           `Google Клас: завдань ${snapshot.classroom.assignments.length}, здач ${snapshot.classroom.submissions.length}`,
@@ -110,12 +98,9 @@ async function main(): Promise<number> {
       } catch (e) {
         snapshot.errors.classroom = message(e);
         log(`Google Клас: ПОМИЛКА — ${snapshot.errors.classroom}`);
-        if (e instanceof GoogleLoginError && e.final) {
-          state.googleRejected = { for: config.google_updated_at ?? 'env', error: snapshot.errors.classroom };
-        }
       }
     } else {
-      snapshot.errors.classroom = 'робот не налаштований: введіть email і пароль Google дитини на сторінці налаштувань';
+      snapshot.errors.classroom = 'робот не налаштований: немає сесії Google — натисніть «Увійти через віддалений браузер» на сторінці налаштувань';
       log(`Google Клас: ${snapshot.errors.classroom}`);
     }
 
@@ -133,9 +118,7 @@ async function main(): Promise<number> {
   log(`Дані передано у Worker (${worker.url})`);
 
   // Червоний запуск (і лист від GitHub) — лише коли джерело налаштоване, але не прочиталося.
-  const failed = Object.values(snapshot.errors).some(
-    (e) => e && !e.startsWith('робот не налаштований') && !e.includes('не пробую знову'),
-  );
+  const failed = Object.values(snapshot.errors).some((e) => e && !e.startsWith('робот не налаштований'));
   return failed ? 1 : 0;
 }
 

@@ -10,8 +10,6 @@ export type VaultName =
   | 'eschool_password'
   | 'eschool_token'
   | 'google_session'
-  | 'google_email'
-  | 'google_password'
   | 'google_oauth'
   | 'robot_state'
   | 'robot_snapshot'

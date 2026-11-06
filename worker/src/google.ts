@@ -1,8 +1,9 @@
 /**
  * Підключення Google-акаунта дитини через OAuth (без робота і без нічого на комп'ютері).
  *
- * 1. На сторінці налаштувань вводяться Client ID і Client secret OAuth-клієнта
- *    типу «Web application» з Google Cloud Console (зберігаються у vault).
+ * 1. OAuth-клієнт (тип «Web application» з Google Cloud Console) береться з секретів
+ *    Worker'а GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET — власник задає їх один раз у GitHub.
+ *    Якщо секретів немає, Client ID і Client secret можна ввести на сторінці (vault).
  * 2. «Увійти через Google» → POST /api/google/start → посилання на accounts.google.com
  *    з state (одноразовий, 15 хв) і redirect_uri = <Worker>/oauth/google/callback.
  * 3. Google повертає на callback код → обмінюємо на refresh token, запам'ятовуємо email
@@ -28,12 +29,19 @@ export const GOOGLE_SCOPES = [
 const STATE_KEY = 'google_oauth_state';
 const STATE_TTL_MS = 15 * 60 * 1000;
 
+export interface GoogleEnv {
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+}
+
 export interface GoogleOAuth {
   client_id: string;
   client_secret: string;
   refresh_token?: string;
   email?: string | null;
   connected_at?: string;
+  /** Звідки клієнт: 'server' — секрети Worker'а, 'page' — введено на сторінці. */
+  source?: 'server' | 'page';
 }
 
 export class GoogleAuthError extends Error {
@@ -47,18 +55,46 @@ export class GoogleAuthError extends Error {
   }
 }
 
-export async function loadGoogle(vault: Vault): Promise<GoogleOAuth | null> {
-  const raw = await vault.get('google_oauth');
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as GoogleOAuth;
-  } catch {
-    return null;
-  }
+/** OAuth-клієнт із секретів Worker'а (якщо задано обидва). */
+export function serverClient(env?: GoogleEnv): { client_id: string; client_secret: string } | null {
+  const id = env?.GOOGLE_CLIENT_ID?.trim();
+  const secret = env?.GOOGLE_CLIENT_SECRET?.trim();
+  return id && secret ? { client_id: id, client_secret: secret } : null;
 }
 
-export const saveGoogle = (vault: Vault, g: GoogleOAuth | null) =>
-  vault.set('google_oauth', g ? JSON.stringify(g) : null);
+/**
+ * Поточний стан підключення Google. Клієнт із секретів Worker'а має пріоритет над
+ * введеним на сторінці; refresh token від іншого клієнта не підходить, тому не береться.
+ */
+export async function loadGoogle(vault: Vault, env?: GoogleEnv): Promise<GoogleOAuth | null> {
+  const raw = await vault.get('google_oauth');
+  let stored: GoogleOAuth | null = null;
+  if (raw) {
+    try {
+      stored = JSON.parse(raw) as GoogleOAuth;
+    } catch {
+      stored = null;
+    }
+  }
+  const server = serverClient(env);
+  if (server) {
+    const same = stored?.client_id === server.client_id;
+    return {
+      ...server,
+      refresh_token: same ? stored?.refresh_token : undefined,
+      email: same ? (stored?.email ?? null) : null,
+      connected_at: same ? stored?.connected_at : undefined,
+      source: 'server',
+    };
+  }
+  return stored ? { ...stored, source: 'page' } : null;
+}
+
+export const saveGoogle = (vault: Vault, g: GoogleOAuth | null) => {
+  if (!g) return vault.set('google_oauth', null);
+  const { source: _source, ...rest } = g;
+  return vault.set('google_oauth', JSON.stringify(rest));
+};
 
 export function callbackUrl(workerOrigin: string): string {
   return `${workerOrigin}${GOOGLE_CALLBACK_PATH}`;
@@ -108,6 +144,7 @@ export async function handleGoogleCallback(
   vault: Vault,
   doFetch: Fetch = fetch,
   now = new Date(),
+  env?: GoogleEnv,
 ): Promise<string> {
   const back = (status: string) => `${PAGE_URL}?google=${encodeURIComponent(status)}`;
   const state = url.searchParams.get('state') ?? '';
@@ -120,7 +157,7 @@ export async function handleGoogleCallback(
   const err = url.searchParams.get('error');
   if (err) return back(err === 'access_denied' ? 'denied' : `error:${err}`);
   const code = url.searchParams.get('code');
-  const g = await loadGoogle(vault);
+  const g = await loadGoogle(vault, env);
   if (!code || !g) return back('error:no_code');
 
   const { status, data } = await tokenRequest(doFetch, {
@@ -170,7 +207,12 @@ export async function googleAccessToken(g: GoogleOAuth, doFetch: Fetch = fetch):
     );
   }
   if (data.error === 'invalid_client' || data.error === 'unauthorized_client') {
-    throw new GoogleAuthError('Google не прийняв Client ID / Client secret. Перевірте їх на сторінці налаштувань.', true);
+    throw new GoogleAuthError(
+      g.source === 'server'
+        ? 'Google не прийняв Client ID / Client secret із секретів GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. Перевірте їх у GitHub → Settings → Secrets.'
+        : 'Google не прийняв Client ID / Client secret. Перевірте їх на сторінці налаштувань.',
+      true,
+    );
   }
   throw new GoogleAuthError(`Google: не вдалося оновити токен (${data.error ?? status})`);
 }

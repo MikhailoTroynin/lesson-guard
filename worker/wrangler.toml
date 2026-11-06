@@ -18,8 +18,14 @@ database_id = "__D1_DATABASE_ID__"
 migrations_dir = "migrations"
 
 # Секрети (задаються в CI через wrangler-action, локально — у .dev.vars):
-#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_BOT_TOKEN                        обов'язковий
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET    необов'язково: спільний OAuth-клієнт Google
+#   GH_WORKFLOW_TOKEN                         необов'язково: запуск workflow GitHub зі сторінки
 #   (секрет вебхука виводиться з токена — див. src/index.ts)
+
+[vars]
+# Репозиторій, чиї workflow («Google login», «Robot») запускає сторінка.
+GITHUB_REPO = "MikhailoTroynin/lesson-guard"
 
 # Перевірка Єдиної школи й Google Класу → Telegram (src/check.ts).
 # Щогодини о :17 з 04:17 до 20:17 UTC (≈ 6:17/7:17 – 22:17/23:17 за Києвом).
