@@ -1,6 +1,6 @@
 name: Auto-merge to main
 
-# Кожен push у будь-яку гілку (крім main) після успішних перевірок
+# Кожен push у будь-яку гілку (крім main, gh-pages, robot-data і setup/**) після успішних перевірок
 # автоматично вливається в main, а потім запускається деплой GitHub Pages
 # та збірка APK.
 on:
@@ -10,6 +10,8 @@ on:
       - '!main'
       - '!gh-pages'
       - '!robot-data'
+      # Інфраструктурні гілки (Cloudflare тощо) мерджаться лише вручну через PR.
+      - '!setup/**'
 
 permissions:
   contents: write

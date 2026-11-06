@@ -44,3 +44,9 @@ yarn-error.*
 robot-data/
 robot-debug/
 google-session.txt
+
+# Cloudflare Worker
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/

@@ -28,7 +28,7 @@ Android-додаток для батьків. Він стежить за зав�
 
 ### Автоматичне злиття в `main`
 
-Workflow **Auto-merge to main** (`.github/workflows/auto-merge.yml`) спрацьовує на push у будь-яку гілку, крім `main`: проганяє lint, typecheck, тести й веб-збірку, а потім вливає гілку в `main` (fast-forward або merge-коміт) і запускає деплой GitHub Pages та збірку APK. Якщо на `main` увімкнено захист гілки, дозвольте `github-actions[bot]` пушити в неї, інакше крок злиття впаде.
+Workflow **Auto-merge to main** (`.github/workflows/auto-merge.yml`) спрацьовує на push у будь-яку гілку, крім `main`, `gh-pages`, `robot-data` і `setup/**`: проганяє lint, typecheck, тести й веб-збірку, а потім вливає гілку в `main` (fast-forward або merge-коміт) і запускає деплой GitHub Pages та збірку APK. Якщо на `main` увімкнено захист гілки, дозвольте `github-actions[bot]` пушити в неї, інакше крок злиття впаде.
 
 ## Встановлення на Android
 
@@ -136,6 +136,108 @@ openssl enc -d -aes-256-cbc -pbkdf2 -in robot-debug.tgz.enc -out robot-debug.tgz
 
 Коли підключено і Google, і Єдину школу, хмарний робот не потрібен. Якщо його налаштовано, він підставляється лише для джерела, яке напряму не підключене.
 
+## Деплой: Telegram-сповіщення (Cloudflare Workers + D1)
+
+Сповіщення батькам у Telegram надсилає Cloudflare Worker з каталогу `worker/`, а дані зберігаються в базі D1 `lesson-guard`. Розгортання йде лише з GitHub Actions (`.github/workflows/deploy.yml`), локально нічого деплоїти не треба.
+
+```
+worker/
+  wrangler.toml          конфіг Worker: name = lesson-guard, D1 binding DB
+  src/index.ts           GET /health, POST /telegram/webhook (поки без логіки)
+  migrations/0001_init.sql  початкова схема D1
+  .dev.vars.example      імена локальних секретів (без значень)
+```
+
+Що вже вміє Worker:
+
+| Маршрут | Що робить |
+|---|---|
+| `GET /health` | `{"ok":true,"service":"lesson-guard"}` |
+| `POST /telegram/webhook` | приймає запит лише з правильним заголовком `X-Telegram-Bot-Api-Secret-Token`, інакше 401. Оновлення поки не обробляє |
+
+Таблиці D1: `children` (діти), `telegram_chats` (чати батьків), `chat_children` (хто отримує сповіщення про яку дитину), `assignments` (завдання), `grades` (оцінки), `notifications_log` (журнал надісланих сповіщень; `UNIQUE (chat_id, dedupe_key)` не дає надіслати те саме двічі).
+
+### Що має бути в GitHub
+
+**Settings → Secrets and variables → Actions.**
+
+| Тип | Назва | Що це |
+|---|---|---|
+| secret | `CLOUDFLARE_API_TOKEN` | API-токен Cloudflare з правами Workers Scripts: Edit і D1: Edit |
+| secret | `TELEGRAM_BOT_TOKEN` | токен бота від @BotFather |
+| secret | `TELEGRAM_WEBHOOK_SECRET` | випадковий рядок, яким Telegram підписує запити на вебхук. Дозволено лише `A-Z a-z 0-9 _ -`, довжина 1–256 символів |
+| variable | `CLOUDFLARE_ACCOUNT_ID` | ID акаунта Cloudflare |
+| variable | `CLOUDFLARE_D1_DATABASE_ID` | ID бази D1 `lesson-guard` |
+
+`TELEGRAM_WEBHOOK_SECRET` можна згенерувати так (на своєму комп'ютері; збережіть значення в менеджері паролів, бо воно ще знадобиться для `setWebhook`):
+
+```bash
+openssl rand -hex 32
+```
+
+ID бази в `worker/wrangler.toml` не зберігається: там стоїть плейсхолдер `__D1_DATABASE_ID__`. Перед кожним запуском wrangler workflow замінює його значенням змінної `CLOUDFLARE_D1_DATABASE_ID` (`sed`) і падає, якщо змінна порожня, не схожа на UUID або плейсхолдер лишився.
+
+Обидва Telegram-секрети потрапляють у Worker через параметр `secrets` у `cloudflare/wrangler-action`: значення передаються у `wrangler secret bulk` через stdin і в лог не виводяться.
+
+### Як запускається деплой
+
+- **Автоматично:** push у `main`, який змінює `worker/**` або `deploy.yml` (тобто після мерджу PR).
+- **Вручну:** **Actions → Deploy Worker → Run workflow → action = `deploy`**.
+
+Міграції D1 автоматично **не** застосовуються.
+
+### Як застосувати міграції
+
+**Actions → Deploy Worker → Run workflow → action = `migrate`.** Job показує список міграцій і застосовує ті, яких ще немає в базі (`wrangler d1 migrations apply lesson-guard --remote`). Повторний запуск безпечний: застосовані міграції пропускаються.
+
+Нова міграція — це новий файл `worker/migrations/000N_опис.sql`. Уже застосовані файли не редагуйте.
+
+### Піддомен workers.dev (один раз, вручну)
+
+Worker публікується на `https://lesson-guard.<піддомен>.workers.dev`. Якщо піддомен ще не зареєстровано, перший деплой упаде з помилкою на кшталт *«You need to register a workers.dev subdomain before publishing to workers.dev»*. До цього моменту wrangler уже встигне створити порожній Worker і записати секрети — це нормально.
+
+1. Відкрийте [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages**.
+2. Праворуч у блоці **Account details** (або **Settings → Subdomain**) натисніть **Change / Set up** біля *Subdomain* і введіть назву, наприклад `lessonguard`. Назва буде видна в адресі Worker.
+3. Дочекайтеся, поки піддомен стане активним (буває до кількох хвилин).
+4. **Actions → Deploy Worker → Run workflow → action = `deploy`** (або **Re-run failed jobs** у запуску, що впав).
+5. Перевірте: `https://lesson-guard.<піддомен>.workers.dev/health` має повернути `{"ok":true,...}`.
+
+### Підключити вебхук Telegram
+
+Після успішного деплою один раз скажіть Telegram, куди надсилати оновлення. Команди нижче читають токен і секрет з клавіатури без відображення, тож вони не потрапляють в історію shell:
+
+```bash
+read -rsp "Bot token: " BOT_TOKEN; echo; read -rsp "Webhook secret: " WEBHOOK_SECRET; echo
+```
+
+```bash
+curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+  --data-urlencode "url=https://lesson-guard.<піддомен>.workers.dev/telegram/webhook" \
+  --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
+  --data-urlencode 'allowed_updates=["message","my_chat_member"]' \
+  -d drop_pending_updates=true
+```
+
+```bash
+curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"; unset BOT_TOKEN WEBHOOK_SECRET
+```
+
+`getWebhookInfo` має показати вашу адресу і не мати `last_error_message`. Якщо змінюєте `TELEGRAM_WEBHOOK_SECRET` у GitHub, задеплойте Worker і повторіть `setWebhook` з новим значенням.
+
+### Локальна перевірка (без доступу до Cloudflare)
+
+```bash
+cd worker && npm ci
+```
+
+```bash
+npm run check   # tsc + wrangler deploy --dry-run (нічого не публікує)
+```
+
+Для `npm run dev` скопіюйте `worker/.dev.vars.example` у `worker/.dev.vars` і впишіть значення. Файл `.dev.vars` у git не потрапляє.
+
+> Гілки `setup/**` виключено з **Auto-merge to main**: зміни інфраструктури потрапляють у `main` лише через ручний мердж PR.
+
 ## Власний ключ підпису (необов’язково)
 
 Без налаштувань APK підписується стандартним debug-ключем. Щоб підписувати власним ключем, згенеруйте keystore і додайте секрети репозиторію:
@@ -185,6 +287,7 @@ src/core/           правила без залежностей від плат
 src/providers/      джерела даних: Google Клас, Єдина школа, демо-сценарій
 src/services/       збирання даних і повна перевірка (для екрана й фону)
 src/platform/       сховище, секрети, сповіщення, фонова задача, вхід Google
+worker/             Cloudflare Worker + D1 для Telegram-сповіщень (див. «Деплой»)
 robot/              хмарний робот (Playwright): Єдина школа, Google Клас, шифрування
   run.ts            один запуск у GitHub Actions → robot-data/snapshot.json
   session.ts        `npm run robot:session` — одноразовий вхід у Google

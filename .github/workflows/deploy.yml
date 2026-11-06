@@ -1,0 +1,138 @@
+name: Deploy Worker
+
+# Cloudflare Worker (каталог worker/) + база D1.
+#
+# • push у main зі змінами в worker/ → деплой Worker (міграції НЕ застосовуються);
+# • Run workflow → action = deploy  → деплой вручну;
+# • Run workflow → action = migrate → застосувати міграції D1 (worker/migrations).
+#
+# Потрібно в Settings → Secrets and variables → Actions:
+#   secrets:   CLOUDFLARE_API_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+#   variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Що зробити'
+        type: choice
+        options:
+          - deploy
+          - migrate
+        default: deploy
+
+permissions:
+  contents: read
+
+# Деплой і міграції не виконуються паралельно; запущене не скасовується.
+concurrency:
+  group: cloudflare-worker
+  cancel-in-progress: false
+
+env:
+  WRANGLER_VERSION: '4.158.0'
+
+jobs:
+  deploy:
+    if: github.event_name == 'push' || inputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Insert D1 database ID into wrangler.toml
+        env:
+          D1_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          if ! [[ "$D1_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "::error::Змінна CLOUDFLARE_D1_DATABASE_ID порожня або не схожа на UUID."
+            exit 1
+          fi
+          sed -i "s/__D1_DATABASE_ID__/${D1_ID}/" wrangler.toml
+          if grep -q "__D1_DATABASE_ID__" wrangler.toml; then
+            echo "::error::Плейсхолдер __D1_DATABASE_ID__ не замінено."
+            exit 1
+          fi
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ env.WRANGLER_VERSION }}
+          workingDirectory: worker
+          # Секрети завантажуються через `wrangler secret bulk` (значення йдуть
+          # через stdin і маскуються GitHub) ще до деплою.
+          secrets: |
+            TELEGRAM_BOT_TOKEN
+            TELEGRAM_WEBHOOK_SECRET
+          command: deploy
+
+  migrate:
+    # Лише вручну: Actions → Deploy Worker → Run workflow → action = migrate.
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'migrate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - run: npm ci
+
+      - name: Insert D1 database ID into wrangler.toml
+        env:
+          D1_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          if ! [[ "$D1_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "::error::Змінна CLOUDFLARE_D1_DATABASE_ID порожня або не схожа на UUID."
+            exit 1
+          fi
+          sed -i "s/__D1_DATABASE_ID__/${D1_ID}/" wrangler.toml
+          if grep -q "__D1_DATABASE_ID__" wrangler.toml; then
+            echo "::error::Плейсхолдер __D1_DATABASE_ID__ не замінено."
+            exit 1
+          fi
+
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ env.WRANGLER_VERSION }}
+          workingDirectory: worker
+          command: |
+            d1 migrations list lesson-guard --remote
+            d1 migrations apply lesson-guard --remote
