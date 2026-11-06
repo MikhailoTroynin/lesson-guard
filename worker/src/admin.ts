@@ -7,7 +7,7 @@
  *
  * Створює дитину, якщо її ще немає (збіг за іменем і класом), і новий одноразовий код.
  */
-import { adminToken, safeEqual } from './crypto';
+import { adminToken, bearerMatches } from './crypto';
 import { createLinkCode, findOrCreateChild } from './linkCodes';
 
 export const ADMIN_LINK_CODE_PATH = '/admin/link-code';
@@ -22,9 +22,7 @@ function json(body: unknown, status = 200): Response {
 }
 
 export async function isAdmin(request: Request, botToken: string): Promise<boolean> {
-  const header = request.headers.get('authorization') ?? '';
-  const m = /^Bearer\s+(\S+)$/i.exec(header);
-  return !!m && (await safeEqual(m[1], await adminToken(botToken)));
+  return bearerMatches(request, await adminToken(botToken));
 }
 
 const clean = (v: unknown) => (typeof v === 'string' ? v.normalize('NFC').replace(/\s+/g, ' ').trim() : '');

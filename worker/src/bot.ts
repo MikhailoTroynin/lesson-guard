@@ -8,6 +8,7 @@
  *   /stop             вимкнути сповіщення (is_active = 0)
  *   my_chat_member    бота заблоковано / видалено з групи → is_active = 0
  */
+import { approveLogin, LOGIN_PREFIX, logoutChat } from './auth';
 import { parseCommand } from './commands';
 import { redeemLinkCode } from './linkCodes';
 import { deactivateChat, sendMessage, type TelegramDeps } from './telegram';
@@ -44,7 +45,7 @@ export const TEXTS = {
     'Щоб отримувати сповіщення про дитину, прив\'яжіть її одноразовим кодом:',
     '/link КОД',
     '',
-    'Код діє 24 години. Його створює адміністратор (GitHub Actions → Deploy Worker → link-code).',
+    'Код діє 24 години. Його створює адміністратор на сторінці налаштувань (розділ «Діти»).',
   ].join('\n'),
   help: [
     'Команди:',
@@ -53,6 +54,7 @@ export const TEXTS = {
     '/children — список прив\'язаних дітей',
     '/unlink ІМ\'Я — відв\'язати дитину',
     '/stop — вимкнути сповіщення в цьому чаті',
+    '/logout — вийти зі сторінки налаштувань на всіх пристроях',
   ].join('\n'),
   linkUsage: 'Надішліть код разом із командою, наприклад:\n/link ABCDE-FGHJK',
   linkInvalid: 'Код не підійшов. Перевірте його або попросіть новий.',
@@ -66,6 +68,16 @@ export const TEXTS = {
   unlinked: (child: string) => `Готово. Сповіщення про ${child} більше не приходитимуть у цей чат.`,
   stopped: 'Сповіщення в цьому чаті вимкнено. Щоб увімкнути знову, надішліть /start.',
   internalError: 'Сталася помилка. Спробуйте, будь ласка, пізніше.',
+  loginApproved:
+    'Вхід на сторінку налаштувань підтверджено. Поверніться на сторінку — вона відкриється сама.\n\nЯкщо це були не ви, надішліть /logout.',
+  loginBecameAdmin:
+    'Ви — адміністратор Lesson Guard: тепер лише цей чат (і ті, кого ви додасте на сторінці) може відкривати налаштування.\n\nВхід підтверджено, поверніться на сторінку.',
+  loginNotAdmin:
+    'У цього чату немає доступу до налаштувань. Попросіть адміністратора додати вас на сторінці налаштувань (розділ «Telegram»).',
+  loginNotPrivate: 'Увійти на сторінку налаштувань можна лише з особистого чату з ботом, не з групи.',
+  loginInvalid: 'Посилання для входу застаріло або вже використане. Натисніть «Увійти» на сторінці ще раз.',
+  loggedOut: (n: number) =>
+    n ? `Готово: завершено сеансів на сторінці налаштувань — ${n}.` : 'Відкритих сеансів на сторінці налаштувань немає.',
 };
 
 export interface BotDeps extends TelegramDeps {
@@ -163,9 +175,26 @@ export async function handleUpdate(update: TgUpdate, deps: BotDeps): Promise<voi
   }
 
   switch (cmd.name) {
-    case 'start':
+    case 'start': {
       await upsertChat(db, msg, true);
+      if (cmd.args.startsWith(LOGIN_PREFIX)) {
+        const r = await approveLogin(db, chatId, msg.chat.type, cmd.args.slice(LOGIN_PREFIX.length), deps.now?.());
+        const text = {
+          approved: TEXTS.loginApproved,
+          became_admin: TEXTS.loginBecameAdmin,
+          not_admin: TEXTS.loginNotAdmin,
+          not_private: TEXTS.loginNotPrivate,
+          invalid: TEXTS.loginInvalid,
+        }[r];
+        await reply(text);
+        return;
+      }
       await reply(TEXTS.welcome);
+      return;
+    }
+
+    case 'logout':
+      await reply(TEXTS.loggedOut(await logoutChat(db, chatId)));
       return;
 
     case 'stop':

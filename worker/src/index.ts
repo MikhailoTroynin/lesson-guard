@@ -5,12 +5,15 @@
  *   POST /telegram/webhook  вебхук Telegram (лише з правильним
  *                           X-Telegram-Bot-Api-Secret-Token) → src/bot.ts
  *   POST /admin/link-code   створити код прив'язки (лише з GitHub Actions) → src/admin.ts
+ *   /api/*                  сторінка налаштувань на GitHub Pages → src/api.ts
+ *   /robot/*                хмарний робот (GitHub Actions) → src/api.ts
  *
  * Окремих секретів, крім токена бота, немає: секрет вебхука й адмін-токен
  * виводяться з TELEGRAM_BOT_TOKEN через HMAC-SHA256 з різними мітками
  * (src/crypto.ts). Те саме обчислюють scripts/set-webhook.mjs і scripts/link-code.mjs.
  */
 import { ADMIN_LINK_CODE_PATH, handleAdminLinkCode } from './admin';
+import { handleApi } from './api';
 import { handleUpdateSafe, type TgUpdate } from './bot';
 import { safeEqual, webhookSecret } from './crypto';
 
@@ -73,6 +76,9 @@ export default {
       }
       return handleTelegramWebhook(request, env);
     }
+
+    const api = await handleApi(request, env);
+    if (api) return api;
 
     if (pathname === ADMIN_LINK_CODE_PATH) {
       if (request.method !== 'POST') {

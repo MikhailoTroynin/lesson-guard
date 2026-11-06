@@ -56,3 +56,22 @@ export async function sendMessage(deps: TelegramDeps, chatId: number, text: stri
     return { ok: false, status, description: String(e) };
   }
 }
+
+let cachedUsername: string | null = null;
+
+/** Ім'я бота (для посилань t.me/<ім'я>). Кешується в межах екземпляра Worker'а. */
+export async function getBotUsername(deps: Omit<TelegramDeps, 'db'>): Promise<string> {
+  if (cachedUsername) return cachedUsername;
+  const doFetch = deps.fetch ?? fetch;
+  const res = await doFetch(`https://api.telegram.org/bot${deps.botToken}/getMe`);
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; result?: { username?: string } };
+  const name = data.result?.username;
+  if (!res.ok || !data.ok || !name) throw new Error(`getMe: ${res.status}`);
+  cachedUsername = name;
+  return name;
+}
+
+/** Лише для тестів. */
+export function resetBotUsernameCache(): void {
+  cachedUsername = null;
+}

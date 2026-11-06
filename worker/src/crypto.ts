@@ -38,6 +38,25 @@ export async function safeEqual(a: string, b: string): Promise<boolean> {
  */
 export const WEBHOOK_SECRET_LABEL = 'lesson-guard:telegram-webhook';
 export const ADMIN_TOKEN_LABEL = 'lesson-guard:admin-api';
+export const ROBOT_TOKEN_LABEL = 'lesson-guard:robot-api';
+export const VAULT_KEY_LABEL = 'lesson-guard:vault-key';
 
 export const webhookSecret = (botToken: string) => hmacHex(botToken, WEBHOOK_SECRET_LABEL);
 export const adminToken = (botToken: string) => hmacHex(botToken, ADMIN_TOKEN_LABEL);
+export const robotToken = (botToken: string) => hmacHex(botToken, ROBOT_TOKEN_LABEL);
+
+/** Випадковий токен: hex з n байтів. */
+export function randomHex(n: number): string {
+  return toHex(crypto.getRandomValues(new Uint8Array(n)).buffer as ArrayBuffer);
+}
+
+/** Перевіряє «Authorization: Bearer <expected>» за сталий час. */
+export async function bearerMatches(request: Request, expected: string): Promise<boolean> {
+  const m = /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') ?? '');
+  return !!m && (await safeEqual(m[1], expected));
+}
+
+/** Токен з «Authorization: Bearer …» або null. */
+export function bearer(request: Request): string | null {
+  return /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') ?? '')?.[1] ?? null;
+}

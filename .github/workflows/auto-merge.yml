@@ -1,8 +1,7 @@
 name: Auto-merge to main
 
 # Кожен push у будь-яку гілку (крім main, gh-pages, robot-data і setup/**) після успішних перевірок
-# автоматично вливається в main, а потім запускається деплой GitHub Pages
-# та збірка APK.
+# автоматично вливається в main, а потім запускається деплой GitHub Pages.
 on:
   push:
     branches:
@@ -64,12 +63,8 @@ jobs:
           fi
           git push origin main
       # Push, зроблений через GITHUB_TOKEN, не запускає інші workflow,
-      # тому деплой Pages і збірку APK запускаємо явно.
+      # тому деплой Pages запускаємо явно.
       - name: Deploy GitHub Pages
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
-      - name: Build Android APK
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run android.yml --ref main --repo "$GITHUB_REPOSITORY"

@@ -1,82 +1,70 @@
 import { DEMO_LAST_STEP, demoClassroom, demoGrades } from '../providers/demo';
-import { GoogleClassroomProvider } from '../providers/classroom/google';
-import { EschoolGradesProvider, type TokenStore } from '../providers/eschool/client';
-import { DEFAULT_ROBOT_URL, RobotSource } from '../providers/robot';
 import type { ClassroomProvider, GradesProvider } from '../providers/types';
-import { getGoogleAccessToken, invalidateGoogleToken, isGoogleConnected } from '../platform/googleAuth';
+import { WorkerSource } from '../providers/worker';
+import { getToken, type ServerSettings } from '../platform/api';
 import { showAlertNotifications } from '../platform/notifications';
-import { secrets } from '../platform/secrets';
 import { storage } from '../platform/storage';
 import { collectAndCheck, type CollectResult } from './collect';
 
-export const ESCHOOL_LOGIN_KEY = 'eschool.login';
-export const ESCHOOL_PASSWORD_KEY = 'eschool.password';
-export const ESCHOOL_TOKEN_KEY = 'eschool.token';
-export const ROBOT_URL_KEY = 'robot.url';
-export const ROBOT_PASSPHRASE_KEY = 'robot.passphrase';
+/** Ключі налаштувань, які зберігаються на сервері (решта — лише в браузері). */
+export const SERVER_SETTING_KEYS = [
+  'badGradeThreshold',
+  'notifyNewAssignments',
+  'subjectMap',
+  'matchWindowDays',
+  'gradeLookbackDays',
+] as const satisfies readonly (keyof ServerSettings)[];
 
-async function buildProviders(demo: boolean): Promise<{
-  classroom: ClassroomProvider | null;
-  grades: GradesProvider | null;
-}> {
-  if (demo) {
-    const step = Math.min(await storage.getDemoStep(), DEMO_LAST_STEP);
-    const now = new Date();
-    return { classroom: demoClassroom(step, now), grades: demoGrades(step, now) };
-  }
-  // Прямі підключення з налаштувань (Google + Єдина школа) мають пріоритет.
-  // Хмарний робот підставляється лише для джерела, яке напряму не підключене.
-  let classroom: ClassroomProvider | null = isGoogleConnected()
-    ? new GoogleClassroomProvider({
-        getAccessToken: getGoogleAccessToken,
-        invalidateToken: invalidateGoogleToken,
-      })
-    : null;
-  const login = await secrets.get(ESCHOOL_LOGIN_KEY);
-  const password = await secrets.get(ESCHOOL_PASSWORD_KEY);
-  let grades: GradesProvider | null =
-    login && password ? new EschoolGradesProvider({ login, password }, undefined, eschoolTokenStore) : null;
-
-  if (!classroom || !grades) {
-    const robotPassphrase = await secrets.get(ROBOT_PASSPHRASE_KEY);
-    if (robotPassphrase) {
-      const robot = new RobotSource((await secrets.get(ROBOT_URL_KEY)) || DEFAULT_ROBOT_URL, robotPassphrase);
-      classroom ??= robot.classroom();
-      grades ??= robot.grades();
-    }
-  }
-  return { classroom, grades };
-}
-
-export const eschoolTokenStore: TokenStore = {
-  get: () => secrets.get(ESCHOOL_TOKEN_KEY),
-  set: async (t) => {
-    if (t) await secrets.set(ESCHOOL_TOKEN_KEY, t);
-    else await secrets.remove(ESCHOOL_TOKEN_KEY);
-  },
-};
+export const NOT_LOGGED_IN = 'Увійдіть через Telegram на вкладці «Налаштування», щоб бачити справжні дані.';
 
 let running: Promise<CollectResult> | null = null;
 
 /**
- * Повна перевірка: дані → правила → збереження → сповіщення.
- * Викликається з екрана («Перевірити зараз») і з фонової задачі.
+ * Повна перевірка: дані → правила → збереження → сповіщення браузера.
+ * Викликається з екрана («Перевірити») і за таймером, поки вкладка відкрита.
  */
 export function performSync(): Promise<CollectResult> {
   if (running) return running;
   running = (async () => {
-    const settings = await storage.getSettings();
+    let settings = await storage.getSettings();
+    let classroom: ClassroomProvider | null = null;
+    let grades: GradesProvider | null = null;
+    const preErrors: string[] = [];
+
+    if (settings.demoMode) {
+      const step = Math.min(await storage.getDemoStep(), DEMO_LAST_STEP);
+      const now = new Date();
+      classroom = demoClassroom(step, now);
+      grades = demoGrades(step, now);
+    } else if (await getToken()) {
+      const source = new WorkerSource();
+      try {
+        // Налаштування з сервера мають пріоритет над збереженими в браузері.
+        const data = await source.fetch();
+        const server = Object.fromEntries(SERVER_SETTING_KEYS.map((k) => [k, data.settings[k]]));
+        settings = { ...settings, ...server };
+        await storage.setSettings(settings);
+        classroom = source.classroom();
+        grades = source.grades();
+      } catch (e) {
+        preErrors.push(e instanceof Error ? e.message : String(e));
+      }
+    } else {
+      preErrors.push(NOT_LOGGED_IN);
+    }
+
     const state = await storage.getState();
-    const providers = await buildProviders(settings.demoMode);
-    const result = await collectAndCheck({ ...providers, settings, state, now: new Date() });
+    const result = await collectAndCheck({ classroom, grades, settings, state, now: new Date() });
+    // «Не підключено» дублює головну причину — показуємо лише її.
+    const errors = preErrors.length ? preErrors : result.errors;
     await storage.setState(result.state);
     await storage.setTimeline(result.timeline);
-    await storage.setMeta({ lastRunAt: result.state.lastRunAt, errors: result.errors });
+    await storage.setMeta({ lastRunAt: result.state.lastRunAt, errors });
     if (result.newAlerts.length > 0) {
       await storage.addAlerts(result.newAlerts);
       await showAlertNotifications(result.newAlerts);
     }
-    return result;
+    return { ...result, errors };
   })().finally(() => {
     running = null;
   });

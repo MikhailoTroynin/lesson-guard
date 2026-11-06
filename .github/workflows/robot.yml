@@ -1,15 +1,14 @@
 name: Robot
 
 # Хмарний робот: браузер (Playwright) заходить у «Єдину школу» і Google Клас
-# акаунтом дитини, збирає оцінки й завдання і кладе ЗАШИФРОВАНИЙ знімок у гілку
-# robot-data. Додаток на телефоні читає його з паролем робота.
+# акаунтом дитини, збирає оцінки й завдання і передає їх Cloudflare Worker'у.
+# Логін/пароль Єдиної школи і сесію Google робот бере з Worker'а — їх вводять
+# на сторінці налаштувань (https://mikhailotroynin.github.io/lesson-guard/settings).
 #
 # Секрети (Settings → Secrets and variables → Actions):
-#   ROBOT_PASSPHRASE  — будь-який довгий пароль (≥ 12 символів); той самий вводиться в додатку
-#   ESCHOOL_LOGIN     — логін дитини в Єдиній школі (номер телефону 380…)
-#   ESCHOOL_PASSWORD  — пароль дитини в Єдиній школі
-#   GOOGLE_SESSION    — рядок з `npm run robot:session` (одноразовий вхід у Google)
-#   GOOGLE_EMAIL / GOOGLE_PASSWORD — необов'язково: Google зазвичай не пускає з ними робота
+#   TELEGRAM_BOT_TOKEN — уже є (з нього виводиться токен робота для Worker'а)
+#   ROBOT_PASSPHRASE   — необов'язково: лише щоб шифрувати скріншоти в режимі debug
+# Змінна WORKER_URL — необов'язково, якщо адреса Worker'а інша, ніж типова.
 
 on:
   schedule:
@@ -18,12 +17,12 @@ on:
   workflow_dispatch:
     inputs:
       debug:
-        description: 'Зберегти скріншоти сторінок (архів зашифровано паролем робота)'
+        description: 'Зберегти скріншоти сторінок (потрібен секрет ROBOT_PASSPHRASE — ним шифрується архів)'
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: robot
@@ -35,6 +34,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -43,46 +44,25 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Restore robot memory
-        run: |
-          mkdir -p robot-data
-          if git fetch --depth=1 origin robot-data; then
-            git show FETCH_HEAD:state.json > robot-data/state.json || rm -f robot-data/state.json
-          else
-            echo "Гілки robot-data ще немає — перший запуск."
-          fi
-
       - name: Run robot
         id: robot
         continue-on-error: true
         env:
-          ROBOT_PASSPHRASE: ${{ secrets.ROBOT_PASSPHRASE }}
-          ESCHOOL_LOGIN: ${{ secrets.ESCHOOL_LOGIN }}
-          ESCHOOL_PASSWORD: ${{ secrets.ESCHOOL_PASSWORD }}
-          GOOGLE_SESSION: ${{ secrets.GOOGLE_SESSION }}
-          GOOGLE_EMAIL: ${{ secrets.GOOGLE_EMAIL }}
-          GOOGLE_PASSWORD: ${{ secrets.GOOGLE_PASSWORD }}
-          DATA_DIR: robot-data
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
           DEBUG_DIR: ${{ inputs.debug && 'robot-debug' || '' }}
         run: npm run robot
 
-      - name: Publish encrypted data to robot-data branch
-        if: hashFiles('robot-data/snapshot.json') != ''
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          export GIT_INDEX_FILE="$RUNNER_TEMP/robot-index"
-          git --work-tree=robot-data add -A
-          tree=$(git write-tree)
-          # Одна коміт-версія без історії: гілка не розростається.
-          commit=$(git commit-tree "$tree" -m "Robot data $(date -u +%FT%TZ)")
-          git push -f origin "$commit:refs/heads/robot-data"
-
       - name: Encrypt debug screenshots
+        id: debug
         if: inputs.debug && hashFiles('robot-debug/**') != ''
         env:
           ROBOT_PASSPHRASE: ${{ secrets.ROBOT_PASSPHRASE }}
         run: |
+          if [ -z "$ROBOT_PASSPHRASE" ]; then
+            echo "::warning::Скріншоти не збережено: задайте секрет ROBOT_PASSPHRASE (ним шифрується архів, бо репозиторій публічний)."
+            exit 0
+          fi
           tar czf robot-debug.tgz robot-debug
           openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:ROBOT_PASSPHRASE -in robot-debug.tgz -out robot-debug.tgz.enc
       - uses: actions/upload-artifact@v4
