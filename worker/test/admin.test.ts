@@ -4,6 +4,8 @@ import worker from '../src/index';
 import { hashCode, normalizeCode } from '../src/linkCodes';
 import { FakeD1 } from './d1';
 
+const ctx = { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext;
+
 const TOKEN = '123:TEST';
 
 async function call(db: FakeD1, body: unknown, auth?: string) {
@@ -12,7 +14,7 @@ async function call(db: FakeD1, body: unknown, auth?: string) {
     body: JSON.stringify(body),
     headers: auth ? { authorization: `Bearer ${auth}` } : {},
   });
-  return worker.fetch(req, { DB: db.d1, TELEGRAM_BOT_TOKEN: TOKEN });
+  return worker.fetch(req, { DB: db.d1, TELEGRAM_BOT_TOKEN: TOKEN }, ctx);
 }
 
 describe('POST /admin/link-code', () => {
@@ -60,6 +62,7 @@ describe('POST /admin/link-code', () => {
     const res = await worker.fetch(
       new Request('https://x/admin/link-code'),
       { DB: new FakeD1().d1, TELEGRAM_BOT_TOKEN: TOKEN },
+      ctx,
     );
     expect(res.status).toBe(405);
   });

@@ -17,6 +17,8 @@ export interface RobotConfig {
   eschool: { login: string; password: string } | null;
   google_session: StorageState | null;
   google_session_updated_at: string | null;
+  /** true — Worker усе читає сам, робот не потрібен. */
+  skip?: boolean;
   state: RobotState | null;
 }
 

@@ -29,6 +29,26 @@ export interface RobotStatus {
   counts: { assignments: number; submissions: number; grades: number };
 }
 
+export interface ServerStatus {
+  checkedAt: string;
+  reason: 'cron' | 'manual' | 'bot' | 'robot';
+  sources: { eschool: 'direct' | 'robot' | 'none'; classroom: 'direct' | 'robot' | 'none' };
+  errors: { classroom?: string; eschool?: string };
+  counts: { assignments: number; submissions: number; grades: number };
+  courses?: { refreshed: number; total: number };
+  alerts: number;
+  recipients: number;
+}
+
+export interface GoogleInfo {
+  client_id: string | null;
+  has_secret: boolean;
+  connected: boolean;
+  email: string | null;
+  connected_at: string | null;
+  redirect_uri: string;
+}
+
 export interface Overview {
   me: { chat_id: number };
   settings: ServerSettings;
@@ -42,6 +62,8 @@ export interface Overview {
     is_admin: boolean;
   }[];
   credentials: { eschool_login: string | null; eschool_password: boolean; google_session_updated_at: string | null };
+  google: GoogleInfo;
+  server: ServerStatus | null;
   robot: RobotStatus | null;
 }
 
@@ -100,7 +122,12 @@ export const api = {
   overview: () => call<Overview & { ok: true }>('GET', '/api/overview'),
   putSettings: (patch: Partial<ServerSettings>) => call<{ settings: ServerSettings }>('PUT', '/api/settings', patch),
   putCredentials: (patch: { eschool_login?: string | null; eschool_password?: string | null; google_session?: string | null }) =>
-    call('PUT', '/api/credentials', patch),
+    call<{ warning?: string }>('PUT', '/api/credentials', patch),
+  check: () => call<{ busy: boolean; server: ServerStatus | null; text: string }>('POST', '/api/check'),
+  putGoogleClient: (clientId: string, clientSecret: string) =>
+    call('PUT', '/api/google/client', { client_id: clientId, client_secret: clientSecret }),
+  googleStart: () => call<{ url: string }>('POST', '/api/google/start'),
+  googleDisconnect: () => call('DELETE', '/api/google'),
   addChild: (name: string, className: string) =>
     call<{ id: number; created: boolean }>('POST', '/api/children', { name, class_name: className || null }),
   deleteChild: (id: number) => call('DELETE', `/api/children/${id}`),

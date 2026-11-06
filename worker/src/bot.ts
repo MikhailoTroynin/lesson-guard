@@ -6,11 +6,19 @@
  *   /children         список прив'язаних дітей
  *   /unlink <ім'я|№>  відв'язати дитину
  *   /stop             вимкнути сповіщення (is_active = 0)
+ *   /status           стан останньої перевірки (Єдина школа, Google Клас)
+ *   /check            перевірити зараз
+ *   /threshold N      поріг поганої оцінки (лише адміністратор)
+ *   /new on|off       сповіщення про нові завдання (лише адміністратор)
+ *   /settings         посилання на сторінку налаштувань
  *   my_chat_member    бота заблоковано / видалено з групи → is_active = 0
  */
 import { approveLogin, LOGIN_PREFIX, logoutChat } from './auth';
+import { describeStatus, getServerStatus } from './check';
 import { parseCommand } from './commands';
 import { redeemLinkCode } from './linkCodes';
+import { PAGE_URL } from './google';
+import { validateSettingsPatch, type AppSettings } from './settings';
 import { deactivateChat, sendMessage, type TelegramDeps } from './telegram';
 
 // Мінімальні типи потрібних полів Telegram Bot API.
@@ -53,9 +61,29 @@ export const TEXTS = {
     '/link КОД — прив\'язати дитину за кодом',
     '/children — список прив\'язаних дітей',
     '/unlink ІМ\'Я — відв\'язати дитину',
+    '/status — що з перевірками (Єдина школа, Google Клас)',
+    '/check — перевірити зараз',
+    '/threshold 7 — оцінка нижче цього числа вважається поганою',
+    '/new on | /new off — сповіщення про нові завдання',
+    '/settings — сторінка налаштувань (логіни, Google, діти)',
     '/stop — вимкнути сповіщення в цьому чаті',
     '/logout — вийти зі сторінки налаштувань на всіх пристроях',
   ].join('\n'),
+  settings: (s: AppSettings) =>
+    [
+      `Сторінка налаштувань: ${PAGE_URL}`,
+      '',
+      `Погана оцінка: нижче ${s.badGradeThreshold} (змінити: /threshold N)`,
+      `Нові завдання: ${s.notifyNewAssignments ? 'сповіщати' : 'не сповіщати'} (/new on | /new off)`,
+    ].join('\n'),
+  noAccess: 'Ця команда доступна адміністратору або чатам, до яких прив\'язано дитину (/link КОД).',
+  adminOnly: 'Змінювати налаштування може лише адміністратор в особистому чаті з ботом.',
+  checking: 'Перевіряю Єдину школу і Google Клас… Нові події прийдуть окремим повідомленням.',
+  checkUnavailable: 'Перевірка зараз недоступна.',
+  thresholdUsage: 'Вкажіть число від 2 до 12, наприклад: /threshold 7',
+  thresholdSet: (n: number) => `Готово: оцінки нижче ${n} вважатимуться поганими.`,
+  newUsage: 'Надішліть /new on або /new off',
+  newSet: (on: boolean) => (on ? 'Готово: сповіщатиму про нові завдання.' : 'Готово: про нові завдання не сповіщатиму.'),
   linkUsage: 'Надішліть код разом із командою, наприклад:\n/link ABCDE-FGHJK',
   linkInvalid: 'Код не підійшов. Перевірте його або попросіть новий.',
   linkRateLimited: 'Забагато невдалих спроб. Спробуйте ще раз через годину.',
@@ -82,6 +110,21 @@ export const TEXTS = {
 
 export interface BotDeps extends TelegramDeps {
   now?: () => Date;
+  /** Запустити перевірку; повертає текст стану. */
+  check?: () => Promise<string>;
+  /** Доробити після відповіді на вебхук (ctx.waitUntil). */
+  defer?: (p: Promise<unknown>) => void;
+  getSettings?: () => Promise<AppSettings>;
+  saveSettings?: (s: AppSettings) => Promise<void>;
+}
+
+async function isAdmin(db: D1Database, chatId: number): Promise<boolean> {
+  return !!(await db.prepare('SELECT 1 AS x FROM admins WHERE chat_id = ?').bind(chatId).first());
+}
+
+async function hasAccess(db: D1Database, chatId: number): Promise<boolean> {
+  if (await isAdmin(db, chatId)) return true;
+  return !!(await db.prepare('SELECT 1 AS x FROM chat_children WHERE chat_id = ? LIMIT 1').bind(chatId).first());
 }
 
 function chatTitle(chat: TgChat): string | null {
@@ -241,6 +284,74 @@ export async function handleUpdate(update: TgUpdate, deps: BotDeps): Promise<voi
         .bind(chatId, picked.child.id)
         .run();
       await reply(TEXTS.unlinked(childLabel(picked.child)));
+      return;
+    }
+
+    case 'status':
+    case 'check': {
+      if (!(await hasAccess(db, chatId))) {
+        await reply(TEXTS.noAccess);
+        return;
+      }
+      if (cmd.name === 'status') {
+        await reply(describeStatus(await getServerStatus(db)));
+        return;
+      }
+      if (!deps.check) {
+        await reply(TEXTS.checkUnavailable);
+        return;
+      }
+      await reply(TEXTS.checking);
+      const job = deps.check().then(
+        (text) => reply(text),
+        (e) => {
+          console.error('/check:', e);
+          return reply(TEXTS.internalError);
+        },
+      );
+      if (deps.defer) deps.defer(job);
+      else await job;
+      return;
+    }
+
+    case 'settings': {
+      if (!(await hasAccess(db, chatId)) || !deps.getSettings) {
+        await reply(`Сторінка налаштувань: ${PAGE_URL}`);
+        return;
+      }
+      await reply(TEXTS.settings(await deps.getSettings()));
+      return;
+    }
+
+    case 'threshold':
+    case 'new': {
+      if (msg.chat.type !== 'private' || !(await isAdmin(db, chatId)) || !deps.getSettings || !deps.saveSettings) {
+        await reply(TEXTS.adminOnly);
+        return;
+      }
+      let patch: Partial<AppSettings>;
+      if (cmd.name === 'threshold') {
+        const n = Number(cmd.args);
+        if (!/^\d{1,2}$/.test(cmd.args) || n < 2 || n > 12) {
+          await reply(TEXTS.thresholdUsage);
+          return;
+        }
+        patch = { badGradeThreshold: n };
+      } else {
+        const a = cmd.args.toLowerCase();
+        if (!['on', 'off', 'так', 'ні'].includes(a)) {
+          await reply(TEXTS.newUsage);
+          return;
+        }
+        patch = { notifyNewAssignments: a === 'on' || a === 'так' };
+      }
+      const next = validateSettingsPatch(await deps.getSettings(), patch);
+      if (typeof next === 'string') {
+        await reply(next);
+        return;
+      }
+      await deps.saveSettings(next);
+      await reply(cmd.name === 'threshold' ? TEXTS.thresholdSet(next.badGradeThreshold) : TEXTS.newSet(next.notifyNewAssignments));
       return;
     }
 

@@ -13,23 +13,28 @@
  *   POST   /api/children/:id/link-code           → { code, expires_at }
  *   DELETE /api/chats/:chatId/children/:childId
  *   PUT    /api/chats/:chatId/admin  { admin: true|false }
- *   GET    /api/snapshot                         останні дані робота (оцінки, завдання)
+ *   GET    /api/snapshot                         останні дані (оцінки, завдання) і стан перевірки
+ *   POST   /api/check                            перевірити зараз (Єдина школа, Google Клас → Telegram)
+ *   PUT    /api/google/client { client_id, client_secret }   OAuth-клієнт з Google Cloud Console
+ *   POST   /api/google/start                     → { url } вхід через Google (повернення на /oauth/google/callback)
+ *   DELETE /api/google                           відключити Google-акаунт
  *
  * Робот (Authorization: Bearer hex(HMAC(TELEGRAM_BOT_TOKEN, ROBOT_TOKEN_LABEL))):
  *   GET    /robot/config                         логіни, сесія Google, пам'ять, налаштування
  *   POST   /robot/report     { snapshot, state }
  */
+import { EschoolLoginError, eschoolLogin } from '../../src/providers/eschool/client';
 import { authenticate, logout, pollLogin, startLogin, type Session } from './auth';
+import { describeStatus, getServerStatus, runServerCheck, type CheckEnv } from './check';
+import { Budget } from './classroom';
+import { callbackUrl, loadGoogle, saveGoogle, startGoogleLogin } from './google';
 import { bearerMatches, robotToken } from './crypto';
 import { createLinkCode, findOrCreateChild } from './linkCodes';
 import { getJson, getSettings, setJson, validateSettingsPatch, type RobotStatus } from './settings';
 import { getBotUsername } from './telegram';
 import { Vault } from './vault';
 
-export interface ApiEnv {
-  DB: D1Database;
-  TELEGRAM_BOT_TOKEN: string;
-}
+export type ApiEnv = CheckEnv;
 
 export const ALLOWED_ORIGINS = ['https://mikhailotroynin.github.io', 'http://localhost:8081'];
 
@@ -107,7 +112,7 @@ export async function handleApi(request: Request, env: ApiEnv, fetchImpl?: typeo
   if (!env.TELEGRAM_BOT_TOKEN) return reply(request, { ok: false, error: 'not configured' }, 503);
 
   try {
-    if (path.startsWith('/robot/')) return await robotRoutes(request, env, path);
+    if (path.startsWith('/robot/')) return await robotRoutes(request, env, path, fetchImpl);
     return await pageRoutes(request, env, path, fetchImpl);
   } catch (e) {
     if (e instanceof HttpError) return reply(request, { ok: false, error: e.message }, e.status);
@@ -140,7 +145,7 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
     await logout(db, session.tokenHash);
     return reply(request, { ok: true });
   }
-  if (path === '/api/overview' && m === 'GET') return reply(request, await overview(env, session));
+  if (path === '/api/overview' && m === 'GET') return reply(request, await overview(env, session, new URL(request.url).origin));
 
   if (path === '/api/settings' && m === 'PUT') {
     const next = validateSettingsPatch(await getSettings(db), await readBody(request));
@@ -152,19 +157,86 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
   if (path === '/api/credentials' && m === 'PUT') {
     const body = await readBody(request);
     const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
+    let login: string | null | undefined;
+    let password: string | null | undefined;
     for (const [k, v] of Object.entries(body)) {
       if (k === 'eschool_login') {
-        const login = clean(v, 100, k);
-        await vault.set('eschool_login', login ? login.replace(/[\s()+-]/g, '') : null);
+        const l = clean(v, 100, k);
+        login = l ? l.replace(/[\s()+-]/g, '') : null;
       } else if (k === 'eschool_password') {
         if (v !== null && (typeof v !== 'string' || v.length > 200)) throw new HttpError(400, `${k}: до 200 символів`);
-        await vault.set('eschool_password', v || null);
+        password = (v as string | null) || null;
       } else if (k === 'google_session') {
         await vault.set('google_session', v === null || v === '' ? null : parseGoogleSession(v));
       } else {
         throw new HttpError(400, `невідоме поле ${k}`);
       }
     }
+    let warning: string | undefined;
+    if (login !== undefined || password !== undefined) {
+      const finalLogin = login === undefined ? await vault.get('eschool_login') : login;
+      const finalPassword = password === undefined ? await vault.get('eschool_password') : password;
+      let token: string | null = null;
+      if (finalLogin && finalPassword) {
+        // Одразу пробуємо увійти: неправильний пароль видно на сторінці, а не через годину.
+        try {
+          token = (await eschoolLogin({ login: finalLogin, password: finalPassword }, new Budget(10, fetchImpl).fetch)) || null;
+        } catch (e) {
+          if (e instanceof EschoolLoginError && ['invalid_credentials', 'validation', 'rate_limited'].includes(e.code)) {
+            throw new HttpError(400, `Єдина школа: ${e.message}`);
+          }
+          warning = `Збережено, але перевірити вхід зараз не вдалося: ${e instanceof Error ? e.message : e}`;
+        }
+      }
+      if (login !== undefined) await vault.set('eschool_login', login);
+      if (password !== undefined) await vault.set('eschool_password', password);
+      await vault.set('eschool_token', token);
+    }
+    return reply(request, { ok: true, warning });
+  }
+
+  if (path === '/api/check' && m === 'POST') {
+    const r = await runServerCheck(env, { reason: 'manual', fetch: fetchImpl });
+    return reply(request, { ok: true, busy: !!r.busy, server: r.status, text: describeStatus(r.status) });
+  }
+
+  if (path === '/api/google/client' && m === 'PUT') {
+    const body = await readBody(request);
+    const clientId = clean(body.client_id, 200, 'client_id');
+    const secret = typeof body.client_secret === 'string' ? body.client_secret.trim() : '';
+    if (!clientId || !/^[\w.-]+\.apps\.googleusercontent\.com$/.test(clientId)) {
+      throw new HttpError(400, 'Client ID має закінчуватися на .apps.googleusercontent.com');
+    }
+    const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
+    const cur = await loadGoogle(vault);
+    if (!secret && cur?.client_id !== clientId) throw new HttpError(400, 'вкажіть Client secret');
+    if (secret.length > 200) throw new HttpError(400, 'Client secret: до 200 символів');
+    const same = cur?.client_id === clientId;
+    await saveGoogle(vault, {
+      ...(same ? cur : {}),
+      client_id: clientId,
+      client_secret: secret || cur!.client_secret,
+    });
+    return reply(request, { ok: true });
+  }
+
+  if (path === '/api/google/start' && m === 'POST') {
+    const g = await loadGoogle(new Vault(db, env.TELEGRAM_BOT_TOKEN));
+    if (!g) throw new HttpError(400, 'спершу збережіть Client ID і Client secret');
+    return reply(request, { ok: true, url: await startGoogleLogin(db, g, new URL(request.url).origin) });
+  }
+
+  if (path === '/api/google' && m === 'DELETE') {
+    const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
+    const g = await loadGoogle(vault);
+    if (g?.refresh_token) {
+      // Відкликаємо доступ у Google (не страшно, якщо не вдалося).
+      await (fetchImpl ?? fetch)(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(g.refresh_token)}`, {
+        method: 'POST',
+      }).catch(() => null);
+    }
+    if (g) await saveGoogle(vault, { client_id: g.client_id, client_secret: g.client_secret });
+    await vault.set('classroom_cache', null);
     return reply(request, { ok: true });
   }
 
@@ -223,6 +295,7 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
       snapshot: raw ? JSON.parse(raw) : null,
       settings: await getSettings(db),
       robot: await getJson<RobotStatus>(db, 'robot_status'),
+      server: await getServerStatus(db),
     });
   }
 
@@ -255,10 +328,10 @@ export function parseGoogleSession(v: unknown): string {
   return JSON.stringify({ cookies: state.cookies, origins: [] });
 }
 
-async function overview(env: ApiEnv, session: Session) {
+async function overview(env: ApiEnv, session: Session, origin: string) {
   const db = env.DB;
   const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
-  const [settings, children, chats, links, admins, vaultList, robot] = await Promise.all([
+  const [settings, children, chats, links, admins, vaultList, robot, server, google] = await Promise.all([
     getSettings(db),
     db.prepare('SELECT id, name, class_name FROM children ORDER BY name, id').all<{ id: number; name: string; class_name: string | null }>(),
     db
@@ -268,6 +341,8 @@ async function overview(env: ApiEnv, session: Session) {
     db.prepare('SELECT chat_id FROM admins').all<{ chat_id: number }>(),
     vault.list(),
     getJson<RobotStatus>(db, 'robot_status'),
+    getServerStatus(db),
+    loadGoogle(vault),
   ]);
   const login = vaultList.eschool_login ? await vault.get('eschool_login') : null;
   const adminSet = new Set(admins.results.map((a) => a.chat_id));
@@ -292,11 +367,20 @@ async function overview(env: ApiEnv, session: Session) {
       eschool_password: !!vaultList.eschool_password,
       google_session_updated_at: vaultList.google_session ?? null,
     },
+    google: {
+      client_id: google?.client_id ?? null,
+      has_secret: !!google?.client_secret,
+      connected: !!google?.refresh_token,
+      email: google?.email ?? null,
+      connected_at: google?.connected_at ?? null,
+      redirect_uri: callbackUrl(origin),
+    },
+    server,
     robot,
   };
 }
 
-async function robotRoutes(request: Request, env: ApiEnv, path: string): Promise<Response> {
+async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImpl?: typeof fetch): Promise<Response> {
   if (!(await bearerMatches(request, await robotToken(env.TELEGRAM_BOT_TOKEN)))) {
     return reply(request, { ok: false, error: 'unauthorized' }, 401);
   }
@@ -304,15 +388,20 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string): Promise
   const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
 
   if (path === '/robot/config' && request.method === 'GET') {
-    const [login, password, google, state, list] = await Promise.all([
+    const [login, password, google, state, list, oauth] = await Promise.all([
       vault.get('eschool_login'),
       vault.get('eschool_password'),
       vault.get('google_session'),
       vault.get('robot_state'),
       vault.list(),
+      loadGoogle(vault),
     ]);
+    // Робот потрібен лише для Google Класу через сесію браузера. Єдину школу
+    // і Google (через вхід Google на сторінці) Worker читає сам.
+    const skip = !google || !!oauth?.refresh_token;
     return reply(request, {
       ok: true,
+      skip,
       eschool: login && password ? { login, password } : null,
       google_session: google ? JSON.parse(google) : null,
       google_session_updated_at: list.google_session ?? null,
@@ -342,10 +431,12 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string): Promise
         grades: snap.grades?.length ?? 0,
       },
     };
-    await vault.set('snapshot', JSON.stringify(snap));
+    await vault.set('robot_snapshot', JSON.stringify(snap));
     if (body.state && typeof body.state === 'object') await vault.set('robot_state', JSON.stringify(body.state));
     await setJson(db, 'robot_status', status);
-    return reply(request, { ok: true });
+    // Нові дані робота → перевірка і сповіщення в Telegram.
+    const r = await runServerCheck(env, { reason: 'robot', fetch: fetchImpl });
+    return reply(request, { ok: true, alerts: r.status?.alerts ?? 0 });
   }
 
   return reply(request, { ok: false, error: 'not found' }, 404);

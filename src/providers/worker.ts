@@ -32,11 +32,11 @@ export class WorkerSource {
   private async snapshot(): Promise<RobotSnapshot> {
     const { snapshot } = await this.fetch();
     if (!snapshot) {
-      throw new Error('Робот ще не передав даних. Заповніть «Акаунти дитини» і запустіть робота (кнопка нижче).');
+      throw new Error('Даних ще немає. Заповніть «Акаунти дитини» і натисніть «Перевірити зараз».');
     }
     const ageH = (this.now().getTime() - Date.parse(snapshot.generatedAt)) / 3_600_000;
     if (ageH > STALE_HOURS) {
-      throw new Error(`Дані робота застарілі (останній запуск ${Math.round(ageH)} год тому). Перевірте вкладку Actions у GitHub.`);
+      throw new Error(`Дані застарілі (остання перевірка ${Math.round(ageH)} год тому). Натисніть «Перевірити зараз» у налаштуваннях.`);
     }
     return snapshot;
   }
@@ -45,7 +45,7 @@ export class WorkerSource {
     return {
       fetch: async (): Promise<ClassroomData> => {
         const s = await this.snapshot();
-        if (!s.classroom) throw new Error(s.errors.classroom ?? 'робот не зміг прочитати Google Клас');
+        if (!s.classroom) throw new Error(s.errors.classroom ?? 'Google Клас не прочитано');
         return s.classroom;
       },
     };
@@ -55,7 +55,7 @@ export class WorkerSource {
     return {
       listGrades: async (from: Date, to: Date): Promise<Grade[]> => {
         const s = await this.snapshot();
-        if (!s.grades) throw new Error(s.errors.eschool ?? 'робот не зміг прочитати Єдину школу');
+        if (!s.grades) throw new Error(s.errors.eschool ?? 'Єдину школу не прочитано');
         const a = from.toISOString().slice(0, 10);
         const b = to.toISOString().slice(0, 10);
         return s.grades.filter((g) => g.date >= a && g.date <= b);

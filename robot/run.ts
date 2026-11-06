@@ -36,6 +36,10 @@ async function main(): Promise<number> {
   const now = new Date();
 
   const config = await worker.config();
+  if (config.skip) {
+    log('Робот не потрібен: Єдину школу і Google Клас Worker читає сам (вхід через Google на сторінці). Завершую.');
+    return 0;
+  }
   const state: RobotState = config.state ?? { items: {} };
   state.items ??= {};
 

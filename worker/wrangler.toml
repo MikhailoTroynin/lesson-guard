@@ -20,3 +20,8 @@ migrations_dir = "migrations"
 # Секрети (задаються в CI через wrangler-action, локально — у .dev.vars):
 #   TELEGRAM_BOT_TOKEN
 #   (секрет вебхука виводиться з токена — див. src/index.ts)
+
+# Перевірка Єдиної школи й Google Класу → Telegram (src/check.ts).
+# Щогодини о :17 з 04:17 до 20:17 UTC (≈ 6:17/7:17 – 22:17/23:17 за Києвом).
+[triggers]
+crons = ["17 4-20 * * *"]

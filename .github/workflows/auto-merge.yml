@@ -44,6 +44,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Merge branch into main
+        id: merge
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
@@ -56,15 +57,26 @@ jobs:
             exit 0
           fi
           git checkout -B main origin/main
+          OLD=$(git rev-parse HEAD)
           if git merge --ff-only "origin/$BRANCH"; then
             echo "Fast-forward main → $BRANCH"
           else
             git merge --no-ff "origin/$BRANCH" -m "Auto-merge $BRANCH into main"
           fi
           git push origin main
+          # Чи змінився код Worker'а (або спільний код, який він використовує)?
+          if ! git diff --quiet "$OLD" HEAD -- worker src/core src/providers .github/workflows/deploy.yml; then
+            echo "worker=true" >> "$GITHUB_OUTPUT"
+          fi
       # Push, зроблений через GITHUB_TOKEN, не запускає інші workflow,
       # тому деплой Pages запускаємо явно.
       - name: Deploy GitHub Pages
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
+      # Деплой Worker'а (Cloudflare) — лише якщо змінився його код.
+      - name: Deploy Worker
+        if: steps.merge.outputs.worker == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref main --repo "$GITHUB_REPOSITORY" -f action=deploy

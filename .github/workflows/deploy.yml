@@ -20,6 +20,8 @@ on:
     branches: [main]
     paths:
       - 'worker/**'
+      - 'src/core/**'
+      - 'src/providers/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:

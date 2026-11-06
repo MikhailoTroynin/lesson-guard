@@ -12,7 +12,30 @@ import { colors, fonts, TAB_BAR_SPACE } from '../ui/theme';
 const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1';
 const REPO = 'https://github.com/MikhailoTroynin/lesson-guard';
 const ROBOT_WORKFLOW_URL = `${REPO}/actions/workflows/robot.yml`;
-const SESSION_HELP_URL = `${REPO}#сесія-google-для-робота`;
+const SESSION_HELP_URL = `${REPO}#запасний-спосіб-робот-і-рядок-сесії-google`;
+const GOOGLE_HELP_URL = `${REPO}#google-клас-один-раз-у-google-cloud-console`;
+const GOOGLE_CONSOLE_URL = 'https://console.cloud.google.com/apis/credentials';
+const PAGE_ORIGIN = 'https://mikhailotroynin.github.io';
+
+const GOOGLE_RESULT: Record<string, string> = {
+  ok: 'Google-акаунт підключено. У Telegram прийде повідомлення «Google Клас підключено».',
+  denied: 'Вхід у Google скасовано.',
+  expired: 'Посилання для входу застаріло. Натисніть «Увійти через Google» ще раз.',
+  scopes: 'Потрібно дозволити доступ до Google Класу і Google Диска (поставте всі галочки у вікні Google).',
+};
+
+/** Результат повернення з Google (?google=…) — читаємо один раз і прибираємо з адреси. */
+function takeGoogleResult(): string {
+  if (typeof window === 'undefined' || !window.location) return '';
+  const params = new URLSearchParams(window.location.search);
+  const v = params.get('google');
+  if (!v) return '';
+  params.delete('google');
+  const rest = params.toString();
+  window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
+  return GOOGLE_RESULT[v] ?? `Google не підключено: ${v.replace(/^error:/, '')}`;
+}
+const googleResult = takeGoogleResult();
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fmtTime = (iso: string | null | undefined) =>
@@ -191,7 +214,7 @@ function EschoolCard({ overview, refresh }: { overview: Overview; refresh: () =>
   const [done, setDone] = useState('');
   const cur = overview.credentials;
   const saved = !!cur.eschool_login && cur.eschool_password;
-  const robotError = overview.robot?.errors.eschool;
+  const robotError = overview.server?.sources.eschool !== 'none' ? overview.server?.errors.eschool : undefined;
 
   const save = async () => {
     setBusy(true);
@@ -201,10 +224,10 @@ function EschoolCard({ overview, refresh }: { overview: Overview; refresh: () =>
       const patch: { eschool_login?: string; eschool_password?: string } = {};
       if (login.trim()) patch.eschool_login = login.trim();
       if (password) patch.eschool_password = password;
-      await api.putCredentials(patch);
+      const r = await api.putCredentials(patch);
       setLogin('');
       setPassword('');
-      setDone('Збережено. Робот використає нові дані під час наступного запуску.');
+      setDone(r.warning ?? 'Вхід у Єдину школу перевірено ✓. Натисніть «Перевірити зараз» нижче — у Telegram прийде підсумок.');
       await refresh();
     } catch (e) {
       setError(errText(e));
@@ -256,12 +279,12 @@ function EschoolCard({ overview, refresh }: { overview: Overview; refresh: () =>
         {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 42 }} />}
       </View>
       {done ? <Text style={styles.hint}>{done}</Text> : null}
-      <ErrorText error={error || (robotError ? `Робот: ${robotError}` : '')} />
+      <ErrorText error={error || robotError || ''} />
     </Surface>
   );
 }
 
-function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
+function GoogleSessionCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
   const [session, setSession] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -296,10 +319,11 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
         <Dot color={updated ? (robotError ? colors.red : colors.green) : colors.neutral400} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас</Text>
-        <Tag label="завдання" fg={colors.neutral800} bg={colors.neutral100} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Робот: сесія Google</Text>
       </View>
       <Text style={styles.hint}>
+        Запасний спосіб, лише якщо вхід через Google вище не підходить (наприклад, школа блокує сторонні застосунки).
+        Потрібен комп’ютер з Node.js.{' '}
         {updated
           ? `Сесію Google збережено ${fmtTime(updated)}. Робот сам її продовжує; нова потрібна, лише якщо Google «розлогінить» робота.`
           : 'Google не пускає робота входити паролем, тому один раз увійти в акаунт дитини треба на комп’ютері командою npm run robot:session — вона видасть рядок, який треба вставити сюди.'}
@@ -321,6 +345,206 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
   );
 }
 
+function CopyRow({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={() => {
+        void navigator.clipboard?.writeText(value).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      style={styles.codeBox}>
+      <Text style={styles.fieldLabel}>
+        {label} {copied ? '· скопійовано ✓' : '· натисніть, щоб скопіювати'}
+      </Text>
+      <Mono style={{ fontSize: 12 }}>{value}</Mono>
+    </Pressable>
+  );
+}
+
+function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
+  const g = overview.google;
+  const [clientId, setClientId] = useState('');
+  const [secret, setSecret] = useState('');
+  const [editing, setEditing] = useState(!g.client_id);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(googleResult);
+  const serverError = overview.server?.sources.classroom === 'direct' ? overview.server.errors.classroom : undefined;
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError('');
+    setDone('');
+    try {
+      await fn();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveClient = () =>
+    run(async () => {
+      await api.putGoogleClient(clientId.trim(), secret.trim());
+      setClientId('');
+      setSecret('');
+      setEditing(false);
+      await refresh();
+    });
+
+  const signIn = () =>
+    run(async () => {
+      const { url } = await api.googleStart();
+      // Google поверне на сервер, а сервер — назад сюди (?google=ok).
+      window.location.href = url;
+    });
+
+  const disconnect = () => {
+    if (!confirmAction('Відключити Google-акаунт? Сервер перестане читати Google Клас.')) return;
+    void run(async () => {
+      await api.googleDisconnect();
+      await refresh();
+    });
+  };
+
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={g.connected ? (serverError ? colors.red : colors.green) : colors.neutral400} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас</Text>
+        <Tag label="завдання" fg={colors.neutral800} bg={colors.neutral100} />
+      </View>
+
+      {g.connected ? (
+        <Text style={styles.hint}>
+          Підключено: {g.email ?? 'акаунт Google'}
+          {g.connected_at ? ` (${fmtTime(g.connected_at)})` : ''}. Сервер сам читає завдання і здані роботи — нічого
+          запускати не треба.
+        </Text>
+      ) : (
+        <Text style={styles.hint}>
+          Один раз створіть OAuth-клієнт у Google Cloud Console (інструкція — кнопка нижче), вставте сюди Client ID і
+          Client secret, потім натисніть «Увійти через Google» і увійдіть акаунтом ДИТИНИ.
+        </Text>
+      )}
+
+      {editing ? (
+        <>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn variant="ghost" title="Інструкція" onPress={() => openUrl(GOOGLE_HELP_URL)} style={{ flex: 1 }} />
+            <Btn variant="ghost" title="Google Cloud Console" onPress={() => openUrl(GOOGLE_CONSOLE_URL)} style={{ flex: 1 }} />
+          </View>
+          <Text style={styles.hint}>У налаштуваннях OAuth-клієнта (тип «Web application») вкажіть:</Text>
+          <CopyRow label="Authorized JavaScript origins" value={PAGE_ORIGIN} />
+          <CopyRow label="Authorized redirect URIs" value={g.redirect_uri} />
+          <Field
+            label="Client ID"
+            value={clientId}
+            onChangeText={setClientId}
+            placeholder={g.client_id ?? '…apps.googleusercontent.com'}
+          />
+          <Field
+            label="Client secret"
+            value={secret}
+            onChangeText={setSecret}
+            placeholder={g.has_secret ? 'Збережено — впишіть, щоб змінити' : 'GOCSPX-…'}
+            secure
+          />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn
+              variant="primary"
+              title="Зберегти"
+              onPress={saveClient}
+              loading={busy}
+              disabled={!clientId.trim() || (!secret.trim() && !g.has_secret)}
+              style={{ flex: 1, minHeight: 42 }}
+            />
+            {g.client_id && <Btn variant="ghost" title="Скасувати" onPress={() => setEditing(false)} style={{ minHeight: 42 }} />}
+          </View>
+        </>
+      ) : (
+        <>
+          <Text style={styles.hint}>Client ID: {g.client_id}</Text>
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+            <Btn
+              variant="primary"
+              title={g.connected ? 'Увійти іншим акаунтом' : 'Увійти через Google'}
+              onPress={signIn}
+              loading={busy}
+              style={{ flex: 1, minHeight: 42 }}
+            />
+            {g.connected && <Btn variant="ghost" title="Відключити" onPress={disconnect} style={{ minHeight: 42 }} />}
+          </View>
+          <Pressable accessibilityRole="button" onPress={() => setEditing(true)}>
+            <Text style={styles.link}>Змінити Client ID / Client secret</Text>
+          </Pressable>
+        </>
+      )}
+      {done ? <Text style={styles.hint}>{done}</Text> : null}
+      <ErrorText error={error || serverError || ''} />
+    </Surface>
+  );
+}
+
+function ServerCheckCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
+  const { sync } = useAppState();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const s = overview.server;
+  const src = (k: 'direct' | 'robot' | 'none') => (k === 'direct' ? 'напряму' : k === 'robot' ? 'через робота' : 'не підключено');
+  const hasErrors = !!s && ((s.sources.eschool !== 'none' && !!s.errors.eschool) || (s.sources.classroom !== 'none' && !!s.errors.classroom));
+
+  const checkNow = async () => {
+    setBusy(true);
+    setError('');
+    setNote('');
+    try {
+      const r = await api.check();
+      setNote(r.busy ? 'Перевірка вже йде — оновіть за хвилину.' : 'Готово. Нові події (якщо є) уже в Telegram.');
+      await refresh();
+      await sync();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Surface style={styles.card}>
+      <View style={styles.sourceHead}>
+        <Dot color={!s ? colors.neutral400 : hasErrors ? colors.red : colors.green} />
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Перевірка і Telegram</Text>
+      </View>
+      <Text style={styles.hint}>
+        Сервер сам перевіряє Єдину школу і Google Клас щогодини з 7:00 до 23:00 і надсилає нові події в Telegram:
+        адміністраторам і чатам, прив’язаним до дитини. У боті: /status, /check, /threshold 7, /new off.
+      </Text>
+      {s ? (
+        <Text style={styles.hint}>
+          Остання перевірка: {fmtTime(s.checkedAt)}.{'\n'}Єдина школа — {src(s.sources.eschool)}, оцінок {s.counts.grades}.
+          {'\n'}Google Клас — {src(s.sources.classroom)}, завдань {s.counts.assignments}, здач {s.counts.submissions}
+          {s.courses && s.courses.refreshed < s.courses.total
+            ? ` (курсів оновлено ${s.courses.refreshed} з ${s.courses.total}, решта — наступного разу)`
+            : ''}
+          .{'\n'}Нових подій: {s.alerts}, отримувачів у Telegram: {s.recipients}.
+        </Text>
+      ) : (
+        <Text style={styles.hint}>Перевірок ще не було.</Text>
+      )}
+      <Btn variant="primary" title="Перевірити зараз" onPress={checkNow} loading={busy} style={{ minHeight: 42 }} />
+      {note ? <Text style={styles.hint}>{note}</Text> : null}
+      <ErrorText error={error} />
+    </Surface>
+  );
+}
+
 function RobotCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
   const { sync, syncing, meta } = useAppState();
   const r = overview.robot;
@@ -329,7 +553,7 @@ function RobotCard({ overview, refresh }: { overview: Overview; refresh: () => P
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
         <Dot color={!r ? colors.neutral400 : hasErrors ? colors.red : colors.green} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот</Text>
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот (необов’язково)</Text>
       </View>
       <Text style={styles.hint}>
         {r
@@ -689,7 +913,7 @@ function NotificationsSection() {
   );
 }
 
-function AdvancedSection() {
+function AdvancedSection({ data, refresh }: { data: Overview | null; refresh: () => Promise<void> }) {
   const { settings, updateSettings } = useAppState();
   const [open, setOpen] = useState(false);
   return (
@@ -715,6 +939,13 @@ function AdvancedSection() {
           </Surface>
           <Kicker>Відповідність предметів</Kicker>
           <SubjectsSection />
+          {data && (
+            <>
+              <Kicker>Запасний спосіб для Google Класу</Kicker>
+              <GoogleSessionCard overview={data} refresh={refresh} />
+              <RobotCard overview={data} refresh={refresh} />
+            </>
+          )}
           <Mono style={{ fontSize: 10.5 }}>Сервер: {WORKER_URL}</Mono>
         </>
       )}
@@ -748,7 +979,7 @@ export default function SettingsScreen() {
                 <Section title="Акаунти дитини">
                   <EschoolCard overview={data} refresh={refresh} />
                   <GoogleCard overview={data} refresh={refresh} />
-                  <RobotCard overview={data} refresh={refresh} />
+                  <ServerCheckCard overview={data} refresh={refresh} />
                 </Section>
                 <Section title="Діти і батьки">
                   <ChildrenCard overview={data} refresh={refresh} />
@@ -760,7 +991,7 @@ export default function SettingsScreen() {
         )}
 
         <NotificationsSection />
-        <AdvancedSection />
+        <AdvancedSection data={data} refresh={refresh} />
 
         <Btn
           title="Очистити історію сповіщень на цій сторінці"
@@ -768,7 +999,7 @@ export default function SettingsScreen() {
           style={{ minHeight: 42 }}
           textStyle={{ color: colors.accent800 }}
         />
-        <Mono style={{ fontSize: 10.5, textAlign: 'center' }}>Lesson Guard · дані оновлює хмарний робот щогодини</Mono>
+        <Mono style={{ fontSize: 10.5, textAlign: 'center' }}>Lesson Guard · сервер перевіряє щогодини і пише в Telegram</Mono>
       </ScrollView>
     </Screen>
   );

@@ -192,6 +192,7 @@ describe('API сторінки налаштувань', () => {
           body: body === undefined ? undefined : JSON.stringify(body),
         }),
         env(),
+        tg.fetch,
       );
       return { status: res!.status, body: (await res!.json()) as any };
     };
@@ -199,21 +200,37 @@ describe('API сторінки налаштувань', () => {
     expect((await robot('GET', '/robot/config', undefined, token)).status).toBe(401); // сесія сторінки не підходить
     const rt = await robotToken(TOKEN);
     const cfg = await robot('GET', '/robot/config', undefined, rt);
-    expect(cfg.body).toMatchObject({ eschool: { login: '380671234567', password: 'p' }, google_session: null, state: null });
+    expect(cfg.body).toMatchObject({
+      eschool: { login: '380671234567', password: 'p' },
+      google_session: null,
+      state: null,
+      skip: true, // без сесії Google робот не потрібен
+    });
+    // Єдину школу Worker тепер читає сам; щоб дані йшли від робота, прибираємо логін.
+    await call('PUT', '/api/credentials', { eschool_login: null, eschool_password: null }, token);
 
+    const at = new Date().toISOString();
     const snapshot = {
       version: 1,
-      generatedAt: '2026-11-06T10:00:00Z',
-      classroom: { assignments: [{ id: 'a' }], submissions: [] },
-      grades: [{ id: 'g1' }, { id: 'g2' }],
+      generatedAt: at,
+      classroom: {
+        assignments: [{ id: 'a', courseId: 'c', courseName: 'Алгебра', title: 'Задачі', createdAt: at }],
+        submissions: [],
+      },
+      grades: [
+        { id: 'g1', subject: 'Алгебра', raw: '10', date: at.slice(0, 10) },
+        { id: 'g2', subject: 'Алгебра', raw: '11', date: at.slice(0, 10) },
+      ],
       errors: {},
     };
     expect((await robot('POST', '/robot/report', { snapshot, state: { items: {} } }, rt)).status).toBe(200);
     expect((await robot('GET', '/robot/config', undefined, rt)).body.state).toEqual({ items: {} });
 
     const o = (await call('GET', '/api/overview', undefined, token)).body;
-    expect(o.robot).toMatchObject({ generatedAt: '2026-11-06T10:00:00Z', counts: { assignments: 1, submissions: 0, grades: 2 } });
-    expect((await call('GET', '/api/snapshot', undefined, token)).body.snapshot).toEqual(snapshot);
+    expect(o.robot).toMatchObject({ generatedAt: at, counts: { assignments: 1, submissions: 0, grades: 2 } });
+    expect(o.server).toMatchObject({ reason: 'robot', sources: { eschool: 'robot', classroom: 'robot' }, errors: {} });
+    const snap = (await call('GET', '/api/snapshot', undefined, token)).body.snapshot;
+    expect(snap).toMatchObject({ classroom: snapshot.classroom, grades: snapshot.grades, errors: {} });
   });
 });
 

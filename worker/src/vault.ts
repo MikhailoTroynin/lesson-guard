@@ -5,7 +5,17 @@
  */
 import { VAULT_KEY_LABEL } from './crypto';
 
-export type VaultName = 'eschool_login' | 'eschool_password' | 'google_session' | 'robot_state' | 'snapshot';
+export type VaultName =
+  | 'eschool_login'
+  | 'eschool_password'
+  | 'eschool_token'
+  | 'google_session'
+  | 'google_oauth'
+  | 'robot_state'
+  | 'robot_snapshot'
+  | 'snapshot'
+  | 'check_state'
+  | 'classroom_cache';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

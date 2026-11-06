@@ -41,7 +41,23 @@ const set = await telegram('setWebhook', {
 });
 console.log(`setWebhook: ${set.description ?? 'ok'}`);
 
-// 3. Перевірка.
+// 3. Меню команд бота (кнопка «/» у Telegram).
+await telegram('setMyCommands', {
+  commands: [
+    { command: 'status', description: 'Що з перевірками' },
+    { command: 'check', description: 'Перевірити зараз' },
+    { command: 'settings', description: 'Налаштування' },
+    { command: 'threshold', description: 'Поріг поганої оцінки, напр. /threshold 7' },
+    { command: 'new', description: 'Нові завдання: /new on або /new off' },
+    { command: 'link', description: 'Прив\'язати дитину кодом' },
+    { command: 'children', description: 'Прив\'язані діти' },
+    { command: 'stop', description: 'Вимкнути сповіщення в цьому чаті' },
+    { command: 'help', description: 'Довідка' },
+  ],
+});
+console.log('setMyCommands: ok');
+
+// 4. Перевірка.
 const info = await telegram('getWebhookInfo', {});
 const r = info.result ?? {};
 console.log(`getWebhookInfo: url=${r.url} pending=${r.pending_update_count}`);
