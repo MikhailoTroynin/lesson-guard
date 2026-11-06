@@ -1,16 +1,18 @@
 /**
- * Lesson Guard — Cloudflare Worker (скелет).
+ * Lesson Guard — Cloudflare Worker.
  *
  *   GET  /health            перевірка, що Worker живий
- *   POST /telegram/webhook  вебхук Telegram; приймає запит лише з правильним
- *                           заголовком X-Telegram-Bot-Api-Secret-Token
+ *   POST /telegram/webhook  вебхук Telegram (лише з правильним
+ *                           X-Telegram-Bot-Api-Secret-Token) → src/bot.ts
+ *   POST /admin/link-code   створити код прив'язки (лише з GitHub Actions) → src/admin.ts
  *
- * Бізнес-логіки поки немає: вебхук лише перевіряє секрет і відповідає 200.
- *
- * Секрет вебхука окремо не зберігається: він виводиться з токена бота
- * (HMAC-SHA256, див. webhookSecret). Те саме обчислює scripts/set-webhook.mjs,
- * коли реєструє вебхук у Telegram після деплою.
+ * Окремих секретів, крім токена бота, немає: секрет вебхука й адмін-токен
+ * виводяться з TELEGRAM_BOT_TOKEN через HMAC-SHA256 з різними мітками
+ * (src/crypto.ts). Те саме обчислюють scripts/set-webhook.mjs і scripts/link-code.mjs.
  */
+import { ADMIN_LINK_CODE_PATH, handleAdminLinkCode } from './admin';
+import { handleUpdateSafe, type TgUpdate } from './bot';
+import { safeEqual, webhookSecret } from './crypto';
 
 export interface Env {
   DB: D1Database;
@@ -27,34 +29,11 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** Мітка, з якої виводиться секрет вебхука. Має збігатися з scripts/set-webhook.mjs. */
-const WEBHOOK_SECRET_LABEL = 'lesson-guard:telegram-webhook';
-
-/** hex(HMAC-SHA256(key = токен бота, message = WEBHOOK_SECRET_LABEL)). */
-async function webhookSecret(botToken: string): Promise<string> {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(botToken),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(WEBHOOK_SECRET_LABEL));
-  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-/** Порівняння рядків за сталий час (через SHA-256, щоб довжина не впливала). */
-async function safeEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [ha, hb] = await Promise.all([
-    crypto.subtle.digest('SHA-256', enc.encode(a)),
-    crypto.subtle.digest('SHA-256', enc.encode(b)),
-  ]);
-  return crypto.subtle.timingSafeEqual(ha, hb);
-}
-
-async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
+export async function handleTelegramWebhook(
+  request: Request,
+  env: Env,
+  fetchImpl?: typeof fetch,
+): Promise<Response> {
   if (!env.TELEGRAM_BOT_TOKEN) {
     // Токен не налаштовано — не приймаємо нічого, щоб не відкрити вебхук для всіх.
     return json({ ok: false, error: 'webhook not configured' }, 503);
@@ -65,8 +44,15 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
-  // TODO: обробка оновлень Telegram (поза межами скелета).
-  // Telegram чекає 2xx, інакше повторює доставку.
+  // Далі завжди 200: інакше Telegram без кінця повторює доставку того самого оновлення.
+  let update: TgUpdate;
+  try {
+    update = await request.json();
+  } catch (e) {
+    console.error('Вебхук: некоректний JSON:', e);
+    return json({ ok: true });
+  }
+  await handleUpdateSafe(update, { db: env.DB, botToken: env.TELEGRAM_BOT_TOKEN, fetch: fetchImpl });
   return json({ ok: true });
 }
 
@@ -86,6 +72,18 @@ export default {
         return json({ ok: false, error: 'method not allowed' }, 405);
       }
       return handleTelegramWebhook(request, env);
+    }
+
+    if (pathname === ADMIN_LINK_CODE_PATH) {
+      if (request.method !== 'POST') {
+        return json({ ok: false, error: 'method not allowed' }, 405);
+      }
+      try {
+        return await handleAdminLinkCode(request, env.DB, env.TELEGRAM_BOT_TOKEN);
+      } catch (e) {
+        console.error('admin/link-code:', e);
+        return json({ ok: false, error: 'internal error' }, 500);
+      }
     }
 
     return json({ ok: false, error: 'not found' }, 404);

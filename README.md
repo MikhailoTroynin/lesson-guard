@@ -143,8 +143,17 @@ openssl enc -d -aes-256-cbc -pbkdf2 -in robot-debug.tgz.enc -out robot-debug.tgz
 ```
 worker/
   wrangler.toml          конфіг Worker: name = lesson-guard, D1 binding DB
-  src/index.ts           GET /health, POST /telegram/webhook (поки без логіки)
+  src/index.ts           маршрути: /health, /telegram/webhook, /admin/link-code
+  src/bot.ts             команди бота (/start, /link, /children, /unlink, /stop)
+  src/linkCodes.ts       одноразові коди прив'язки, ліміт невдалих спроб
+  src/telegram.ts        sendMessage (403 → чат неактивний)
+  src/admin.ts           POST /admin/link-code (лише з GitHub Actions)
+  src/crypto.ts          HMAC-секрети, виведені з токена бота
   migrations/0001_init.sql  початкова схема D1
+  migrations/0002_link_codes.sql  коди прив'язки і спроби /link
+  scripts/set-webhook.mjs   реєстрація вебхука після деплою
+  scripts/link-code.mjs     створення коду (action = link-code)
+  test/                  vitest; D1 замінено на node:sqlite зі справжніми міграціями
   .dev.vars.example      імена локальних секретів (без значень)
 ```
 
@@ -153,9 +162,23 @@ worker/
 | Маршрут | Що робить |
 |---|---|
 | `GET /health` | `{"ok":true,"service":"lesson-guard"}` |
-| `POST /telegram/webhook` | приймає запит лише з правильним заголовком `X-Telegram-Bot-Api-Secret-Token`, інакше 401. Оновлення поки не обробляє |
+| `POST /telegram/webhook` | приймає запит лише з правильним заголовком `X-Telegram-Bot-Api-Secret-Token`, інакше 401. Обробляє команди бота (див. нижче). На помилки всередині обробки все одно відповідає 200 (помилка йде в лог Worker'а), щоб Telegram не повторював доставку |
+| `POST /admin/link-code` | створює дитину (якщо її ще немає) і одноразовий код прив'язки. Лише з `Authorization: Bearer <адмін-токен>`, інакше 401 |
 
-Таблиці D1: `children` (діти), `telegram_chats` (чати батьків), `chat_children` (хто отримує сповіщення про яку дитину), `assignments` (завдання), `grades` (оцінки), `notifications_log` (журнал надісланих сповіщень; `UNIQUE (chat_id, dedupe_key)` не дає надіслати те саме двічі).
+Команди бота:
+
+| Команда | Що робить |
+|---|---|
+| `/start` | записує чат у `telegram_chats` (`is_active = 1`), вітає і пояснює, як прив'язати дитину |
+| `/link КОД` | перевіряє одноразовий код і прив'язує дитину до чату. Неправильний, прострочений і використаний код дають однакову відповідь. Після 5 невдалих спроб за годину чат тимчасово блокується |
+| `/children` | список прив'язаних дітей |
+| `/unlink ІМ'Я` | відв'язує дитину (можна ім'я, «Ім'я (клас)» або номер зі списку `/children`) |
+| `/stop` | `is_active = 0`; сповіщення в цей чат не надсилаються, поки не буде `/start` |
+| інше | коротка довідка (у групах на звичайний текст бот не відповідає) |
+
+Якщо бота заблоковано або видалено з групи (подія `my_chat_member`) або Telegram відповів 403 на `sendMessage`, чат позначається `is_active = 0`.
+
+Таблиці D1: `children` (діти), `telegram_chats` (чати батьків), `chat_children` (хто отримує сповіщення про яку дитину), `assignments` (завдання), `grades` (оцінки), `notifications_log` (журнал надісланих сповіщень; `UNIQUE (chat_id, dedupe_key)` не дає надіслати те саме двічі), `link_codes` (одноразові коди прив'язки; зберігається лише SHA-256 коду), `link_attempts` (невдалі спроби `/link` для ліміту).
 
 ### Що має бути в GitHub
 
@@ -168,7 +191,7 @@ worker/
 | variable | `CLOUDFLARE_ACCOUNT_ID` | ID акаунта Cloudflare |
 | variable | `CLOUDFLARE_D1_DATABASE_ID` | ID бази D1 `lesson-guard` |
 
-Окремий секрет для вебхука не потрібен: Worker і скрипт реєстрації обчислюють його з токена бота як `hex(HMAC-SHA256(токен, "lesson-guard:telegram-webhook"))`. Якщо змінити токен у @BotFather і в GitHub, наступний деплой сам перереєструє вебхук з новим секретом.
+Окремий секрет для вебхука не потрібен: Worker і скрипт реєстрації обчислюють його з токена бота як `hex(HMAC-SHA256(токен, "lesson-guard:telegram-webhook"))`. Так само виводиться адмін-токен для `/admin/link-code`, але з іншою міткою: `hex(HMAC-SHA256(токен, "lesson-guard:admin-api"))`, тож секрет вебхука не відкриває адмін-API. Якщо змінити токен у @BotFather і в GitHub, наступний деплой сам перереєструє вебхук з новим секретом.
 
 ID бази в `worker/wrangler.toml` не зберігається: там стоїть плейсхолдер `__D1_DATABASE_ID__`. Перед кожним запуском wrangler workflow замінює його значенням змінної `CLOUDFLARE_D1_DATABASE_ID` (`sed`) і падає, якщо змінна порожня, не схожа на UUID або плейсхолдер лишився.
 
@@ -176,7 +199,7 @@ ID бази в `worker/wrangler.toml` не зберігається: там ст
 
 ### Як запускається деплой
 
-- **Автоматично:** push у `main`, який змінює `worker/**` або `deploy.yml` (тобто після мерджу PR).
+- **Автоматично:** push у `main`, який змінює `worker/**` або `deploy.yml` (тобто після мерджу PR). Мердж через `auto-merge.yml` робиться з `GITHUB_TOKEN` і деплой **не** запускає — після нього запускайте деплой вручну.
 - **Вручну:** **Actions → Deploy Worker → Run workflow → action = `deploy`**.
 
 Міграції D1 автоматично **не** застосовуються.
@@ -185,7 +208,19 @@ ID бази в `worker/wrangler.toml` не зберігається: там ст
 
 **Actions → Deploy Worker → Run workflow → action = `migrate`.** Job показує список міграцій і застосовує ті, яких ще немає в базі (`wrangler d1 migrations apply lesson-guard --remote`). Повторний запуск безпечний: застосовані міграції пропускаються.
 
-Нова міграція — це новий файл `worker/migrations/000N_опис.sql`. Уже застосовані файли не редагуйте.
+Нова міграція — це новий файл `worker/migrations/000N_опис.sql`. Уже застосовані файли не редагуйте. Якщо новий код Worker'а залежить від нової міграції, спершу `migrate`, потім `deploy`.
+
+### Як прив'язати чат батьків до дитини
+
+1. **Actions → Deploy Worker → Run workflow**: `action = link-code`, **«ім'я дитини»** (наприклад, `Олена`), **«клас»** (наприклад, `7-А`, можна залишити порожнім) → **Run workflow**.
+2. Відкрийте завершений запуск і прокрутіть до **Summary**: там буде команда виду `/link ABCDE-FGHJK`. У логах кроку коду немає.
+3. У Telegram відкрийте бота (або додайте його в групу батьків), надішліть `/start`, а потім цю команду `/link …`. Бот відповість, про кого тепер приходитимуть сповіщення. Перевірити: `/children`.
+
+Код одноразовий і діє 24 години. Якщо дитина з таким ім'ям і класом уже є, нова не створюється — лише новий код. Для другого батька чи іншого чату запустіть `link-code` ще раз.
+
+Адресу Worker'а скрипт визначає через Cloudflare API (піддомен workers.dev акаунта). Якщо це не спрацює, задайте змінну репозиторію `WORKER_URL` (наприклад, `https://lesson-guard.<піддомен>.workers.dev`).
+
+> Summary видно всім, хто має доступ до вкладки Actions цього репозиторію. Код одноразовий і короткоживучий, але не пересилайте посилання на запуск стороннім.
 
 ### Піддомен workers.dev (один раз, вручну)
 
@@ -213,7 +248,7 @@ cd worker && npm ci
 ```
 
 ```bash
-npm run check   # tsc + wrangler deploy --dry-run (нічого не публікує)
+npm run check   # tsc + тести (vitest) + wrangler deploy --dry-run (нічого не публікує)
 ```
 
 Для `npm run dev` скопіюйте `worker/.dev.vars.example` у `worker/.dev.vars` і впишіть значення. Файл `.dev.vars` у git не потрапляє.
