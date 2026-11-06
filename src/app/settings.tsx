@@ -11,18 +11,22 @@ import { colors, fonts, TAB_BAR_SPACE } from '../ui/theme';
 
 const forcedDemo = process.env.EXPO_PUBLIC_DEMO === '1';
 const REPO = 'https://github.com/MikhailoTroynin/lesson-guard';
-const ROBOT_WORKFLOW_URL = `${REPO}/actions/workflows/robot.yml`;
-const GOOGLE_LOGIN_WORKFLOW_URL = `${REPO}/actions/workflows/google-login.yml`;
-const SESSION_HELP_URL = `${REPO}#запасний-спосіб-робот-і-рядок-сесії-google`;
-const GOOGLE_HELP_URL = `${REPO}#google-клас-один-раз-у-google-cloud-console`;
+const SESSION_HELP_URL = `${REPO}#рядок-сесії-з-компютера`;
+const GOOGLE_HELP_URL = `${REPO}#2-oauth-клієнт-google-один-раз`;
+const SCHOOL_HELP_URL = `${REPO}#якщо-школа-блокує-вхід-через-google`;
 const GOOGLE_CONSOLE_URL = 'https://console.cloud.google.com/apis/credentials';
 const PAGE_ORIGIN = 'https://mikhailotroynin.github.io';
 
+const BLOCKED_BY_SCHOOL =
+  'Школа блокує сторонні застосунки для цього акаунта. Нижче — що робити: запит адміністратору або вхід через віддалений браузер.';
 const GOOGLE_RESULT: Record<string, string> = {
   ok: 'Google-акаунт підключено. У Telegram прийде повідомлення «Google Клас підключено».',
   denied: 'Вхід у Google скасовано.',
   expired: 'Посилання для входу застаріло. Натисніть «Увійти через Google» ще раз.',
   scopes: 'Потрібно дозволити доступ до Google Класу і Google Диска (поставте всі галочки у вікні Google).',
+  'error:access_not_configured': BLOCKED_BY_SCHOOL,
+  'error:admin_policy_enforced': BLOCKED_BY_SCHOOL,
+  'error:org_internal': BLOCKED_BY_SCHOOL,
 };
 
 /** Результат повернення з Google (?google=…) — читаємо один раз і прибираємо з адреси. */
@@ -323,10 +327,10 @@ function GoogleSessionCard({ overview, refresh }: { overview: Overview; refresh:
         <Text style={[styles.cardTitle, { flex: 1 }]}>Робот: сесія Google</Text>
       </View>
       <Text style={styles.hint}>
-        Лише якщо робот не може увійти паролем (Google відхиляє вхід з браузера робота). Потрібен комп’ютер з Node.js.{' '}
+        Запасний варіант замість віддаленого браузера: потрібен комп’ютер з Node.js.{' '}
         {updated
           ? `Сесію Google збережено ${fmtTime(updated)}. Робот сам її продовжує; нова потрібна, лише якщо Google «розлогінить» робота.`
-          : 'Google не пускає робота входити паролем, тому один раз увійти в акаунт дитини треба на комп’ютері командою npm run robot:session — вона видасть рядок, який треба вставити сюди.'}
+          : 'Команда npm run robot:session відкриє Chrome: увійдіть акаунтом дитини, і вона видасть рядок, який треба вставити сюди.'}
       </Text>
       <Btn variant="ghost" title="Як отримати рядок сесії (інструкція)" onPress={() => openUrl(SESSION_HELP_URL)} />
       <Field
@@ -365,23 +369,64 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Запуск workflow GitHub зі сторінки: через Worker (секрет GH_WORKFLOW_TOKEN) або посиланням на «Run workflow». */
+function useWorkflowRunner(workflow: 'google-login' | 'robot', startedText: string) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+  const run = async () => {
+    setBusy(true);
+    setNote('');
+    setError('');
+    try {
+      const r = await api.runWorkflow(workflow);
+      if (r.started) {
+        setNote(startedText);
+      } else {
+        openUrl(r.url);
+        setNote(
+          `Відкрилася сторінка GitHub: натисніть «Run workflow» → зелена «Run workflow». ${startedText}` +
+            (r.error ? '' : ' (Щоб кнопка запускала все сама, власник може додати секрет GH_WORKFLOW_TOKEN — див. README.)'),
+        );
+        if (r.error) setError(r.error);
+      }
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { run, busy, note, error };
+}
+
 function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
   // Старіший сервер може ще не віддавати google — тоді показуємо картку «не підключено».
   const g: Overview['google'] = overview.google ?? {
     client_id: null,
+    client_source: null,
     has_secret: false,
     connected: false,
     email: null,
     connected_at: null,
     redirect_uri: `${WORKER_URL}/oauth/google/callback`,
   };
+  const serverClient = g.client_source === 'server';
+  const sessionAt = overview.credentials.google_session_updated_at;
+  const viaRobot = !g.connected && !!sessionAt;
   const [clientId, setClientId] = useState('');
   const [secret, setSecret] = useState('');
   const [editing, setEditing] = useState(!g.client_id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(googleResult);
-  const serverError = overview.server?.sources.classroom === 'direct' ? overview.server.errors.classroom : undefined;
+  const [schoolOpen, setSchoolOpen] = useState(googleResult === BLOCKED_BY_SCHOOL);
+  const s = overview.server;
+  const serverError =
+    s?.sources.classroom === 'direct' ? s.errors.classroom : s?.sources.classroom === 'robot' ? s.errors.classroom : undefined;
+  const remote = useWorkflowRunner(
+    'google-login',
+    'За 1–2 хвилини бот надішле вам у Telegram посилання на вікно Chrome — увійдіть там акаунтом дитини.',
+  );
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -420,10 +465,21 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
     });
   };
 
+  const forgetSession = () => {
+    if (!confirmAction('Видалити збережений вхід через браузер? Робот перестане бачити Google Клас.')) return;
+    void run(async () => {
+      await api.putCredentials({ google_session: null });
+      await refresh();
+    });
+  };
+
+  const connected = g.connected || viaRobot;
+  const dot = connected ? (serverError ? colors.red : colors.green) : colors.neutral400;
+
   return (
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
-        <Dot color={g.connected ? (serverError ? colors.red : colors.green) : colors.neutral400} />
+        <Dot color={dot} />
         <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас</Text>
         <Tag label="завдання" fg={colors.neutral800} bg={colors.neutral100} />
       </View>
@@ -434,15 +490,25 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
           {g.connected_at ? ` (${fmtTime(g.connected_at)})` : ''}. Сервер сам читає завдання і здані роботи — нічого
           запускати не треба.
         </Text>
+      ) : viaRobot ? (
+        <Text style={styles.hint}>
+          Підключено через віддалений браузер ({fmtTime(sessionAt)}). Робот читає Google Клас щогодини з 7:00 до 22:00.
+          Повторити вхід треба, лише якщо Google «розлогінить» — бот про це напише.
+        </Text>
       ) : (
         <Text style={styles.hint}>
-          Один раз створіть OAuth-клієнт у Google Cloud Console (інструкція — кнопка нижче), вставте сюди Client ID і
-          Client secret, потім натисніть «Увійти через Google» і увійдіть акаунтом ДИТИНИ.
+          Натисніть «Увійти через Google» і увійдіть акаунтом ДИТИНИ, поставивши всі галочки. Далі сервер сам читає
+          завдання і здані роботи.
         </Text>
       )}
 
-      {editing ? (
+      {!g.client_id || (editing && !serverClient) ? (
         <>
+          <Text style={styles.hint}>
+            {serverClient
+              ? ''
+              : 'OAuth-клієнта Google ще немає. Найпростіше — власник один раз додає секрети GOOGLE_CLIENT_ID і GOOGLE_CLIENT_SECRET у GitHub (інструкція нижче), і це поле зникає. Або вставте свій Client ID і Client secret сюди:'}
+          </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Btn variant="ghost" title="Інструкція" onPress={() => openUrl(GOOGLE_HELP_URL)} style={{ flex: 1 }} />
             <Btn variant="ghost" title="Google Cloud Console" onPress={() => openUrl(GOOGLE_CONSOLE_URL)} style={{ flex: 1 }} />
@@ -477,10 +543,9 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
         </>
       ) : (
         <>
-          <Text style={styles.hint}>Client ID: {g.client_id}</Text>
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             <Btn
-              variant="primary"
+              variant={g.connected ? 'ghost' : 'primary'}
               title={g.connected ? 'Увійти іншим акаунтом' : 'Увійти через Google'}
               onPress={signIn}
               loading={busy}
@@ -488,128 +553,59 @@ function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => 
             />
             {g.connected && <Btn variant="ghost" title="Відключити" onPress={disconnect} style={{ minHeight: 42 }} />}
           </View>
-          <Pressable accessibilityRole="button" onPress={() => setEditing(true)}>
-            <Text style={styles.link}>Змінити Client ID / Client secret</Text>
-          </Pressable>
+          {!serverClient && (
+            <Pressable accessibilityRole="button" onPress={() => setEditing(true)}>
+              <Text style={styles.link}>Змінити Client ID / Client secret</Text>
+            </Pressable>
+          )}
         </>
+      )}
+
+      {!g.connected && (
+        <View style={[styles.sep, { paddingTop: 10, gap: 8 }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: schoolOpen }}
+            onPress={() => setSchoolOpen((v) => !v)}>
+            <Text style={styles.link}>
+              {viaRobot ? 'Увійти через віддалений браузер ще раз' : 'Школа блокує вхід через Google?'} {schoolOpen ? '▾' : '▸'}
+            </Text>
+          </Pressable>
+          {schoolOpen && (
+            <>
+              <Text style={styles.hint}>
+                Шкільні акаунти (…@school.ukr.education) часто показують «Доступ заблоковано: адміністратор вашого закладу
+                має перевірити додаток». Google дозволяє це лише адміністратору школи, тож є два шляхи:
+              </Text>
+              <Text style={styles.hint}>
+                1. У вікні Google натисніть «Надіслати запит на доступ» — запит з’явиться в адміністратора школи. Коли
+                він дозволить застосунок{g.client_id ? ` (Client ID ${g.client_id})` : ''}, натисніть «Увійти через
+                Google» ще раз, і далі все працюватиме без робота.
+              </Text>
+              <Text style={styles.hint}>
+                2. Поки що — увійдіть через віддалений браузер, нічого не встановлюючи: натисніть кнопку, за 1–2 хвилини
+                бот надішле в Telegram посилання на вікно Chrome. Увійдіть там акаунтом дитини, як звичайно (підтвердьте
+                на телефоні, якщо Google попросить). Коли відкриється Google Клас, вхід збережеться сам.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                <Btn
+                  variant="primary"
+                  title="Увійти через віддалений браузер"
+                  onPress={remote.run}
+                  loading={remote.busy}
+                  style={{ flex: 1, minHeight: 42 }}
+                />
+                {viaRobot && <Btn variant="ghost" title="Видалити вхід" onPress={forgetSession} style={{ minHeight: 42 }} />}
+              </View>
+              <Btn variant="ghost" title="Докладніше (README)" onPress={() => openUrl(SCHOOL_HELP_URL)} />
+              {remote.note ? <Text style={styles.hint}>{remote.note}</Text> : null}
+              <ErrorText error={remote.error} />
+            </>
+          )}
+        </View>
       )}
       {done ? <Text style={styles.hint}>{done}</Text> : null}
       <ErrorText error={error || serverError || ''} />
-    </Surface>
-  );
-}
-
-function RobotGoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
-  const cur = overview.credentials;
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [done, setDone] = useState('');
-  const saved = !!cur.google_email && !!cur.google_password;
-  const s = overview.server;
-  const robotError = s?.sources.classroom === 'robot' ? s.errors.classroom : undefined;
-
-  const save = async () => {
-    setBusy(true);
-    setError('');
-    setDone('');
-    try {
-      const patch: { google_email?: string; google_password?: string } = {};
-      if (email.trim()) patch.google_email = email.trim();
-      if (password) patch.google_password = password;
-      await api.putCredentials(patch);
-      setEmail('');
-      setPassword('');
-      setDone('Збережено. Запустіть робота кнопкою нижче (або зачекайте до наступної години).');
-      await refresh();
-    } catch (e) {
-      setError(errText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const forget = async () => {
-    if (!confirmAction('Видалити email і пароль Google дитини з сервера?')) return;
-    try {
-      await api.putCredentials({ google_email: null, google_password: null });
-      await refresh();
-    } catch (e) {
-      setError(errText(e));
-    }
-  };
-
-  return (
-    <Surface style={styles.card}>
-      <View style={styles.sourceHead}>
-        <Dot color={saved ? (robotError ? colors.red : colors.green) : colors.neutral400} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Google Клас через робота</Text>
-        <Tag label="часто блокує Google" fg={colors.neutral800} bg={colors.neutral100} />
-      </View>
-      <Text style={styles.hint}>
-        {saved
-          ? `Збережено: ${cur.google_email}, пароль — так. Робот щогодини входить у Google Клас у GitHub Actions; вхід запам’ятовується, тож пароль потрібен лише вперше і коли Google «розлогінить».`
-          : 'Якщо «Увійти через Google» показує «Доступ заблоковано: адміністратор вашого закладу…», введіть тут email і пароль Google ДИТИНИ. Робот (браузер у GitHub Actions) сам увійде в Google Клас — на вашому комп’ютері нічого запускати не треба. Зберігаються на сервері в зашифрованому вигляді.'}
-      </Text>
-      <Text style={styles.hint}>
-        Якщо Google попросить підтвердити вхід («Це ви?»), бот напише вам у Telegram — натисніть «Так» на телефоні дитини протягом 4 хвилин.
-      </Text>
-      <Field label="Email Google дитини" value={email} onChangeText={setEmail} placeholder={cur.google_email ?? 'name@school.ua'} autoComplete="username" />
-      <Field
-        label="Пароль Google"
-        value={password}
-        onChangeText={setPassword}
-        placeholder={cur.google_password ? 'Збережено — впишіть, щоб змінити' : 'Пароль'}
-        secure
-        autoComplete="password"
-      />
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Btn
-          variant="primary"
-          title="Зберегти"
-          onPress={save}
-          loading={busy}
-          disabled={saved ? !email.trim() && !password : !email.trim() || !password}
-          style={{ flex: 1, minHeight: 42 }}
-        />
-        {saved && <Btn variant="ghost" title="Видалити" onPress={forget} style={{ minHeight: 42 }} />}
-      </View>
-      {done ? <Text style={styles.hint}>{done}</Text> : null}
-      <ErrorText error={error || robotError || ''} />
-    </Surface>
-  );
-}
-
-function RemoteGoogleLoginCard({ overview }: { overview: Overview }) {
-  const updated = overview.credentials.google_session_updated_at;
-  const s = overview.server;
-  const robotError = s?.sources.classroom === 'robot' ? s.errors.classroom : undefined;
-  return (
-    <Surface style={styles.card}>
-      <View style={styles.sourceHead}>
-        <Dot color={updated ? (robotError ? colors.red : colors.green) : colors.neutral400} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Вхід у Google через віддалений браузер</Text>
-        <Tag label="якщо школа блокує" fg={colors.neutral800} bg={colors.neutral100} />
-      </View>
-      <Text style={styles.hint}>
-        {updated
-          ? `Вхід збережено ${fmtTime(updated)}. Робот щогодини читає Google Клас цією сесією. Повторити вхід треба, лише якщо Google «розлогінить» (бот про це напише).`
-          : 'Для шкільних акаунтів, де «Увійти через Google» заблоковано адміністратором. Нічого не треба встановлювати:'}
-      </Text>
-      <Text style={styles.hint}>
-        1. Натисніть кнопку нижче → на GitHub «Run workflow» → зелена «Run workflow».{'\n'}
-        2. Приблизно за 1–2 хвилини бот надішле вам у Telegram посилання.{'\n'}
-        3. Відкрийте його (можна з телефону) — побачите вікно Chrome. Увійдіть акаунтом ДИТИНИ, як звичайно.{'\n'}
-        4. Коли відкриється Google Клас, вхід збережеться сам, і робот одразу прочитає завдання.
-      </Text>
-      <Btn
-        variant="primary"
-        title={updated ? 'Увійти в Google ще раз' : 'Увійти в Google'}
-        onPress={() => openUrl(GOOGLE_LOGIN_WORKFLOW_URL)}
-        style={{ minHeight: 42 }}
-      />
-      <ErrorText error={robotError || ''} />
     </Surface>
   );
 }
@@ -672,21 +668,21 @@ function RobotCard({ overview, refresh }: { overview: Overview; refresh: () => P
   const { sync, syncing, meta } = useAppState();
   const r = overview.robot;
   const hasErrors = !!(r && (r.errors.classroom || r.errors.eschool));
+  const runner = useWorkflowRunner('robot', 'Через 3–5 хвилин натисніть «Оновити».');
   return (
     <Surface style={styles.card}>
       <View style={styles.sourceHead}>
         <Dot color={!r ? colors.neutral400 : hasErrors ? colors.red : colors.green} />
-        <Text style={[styles.cardTitle, { flex: 1 }]}>Хмарний робот</Text>
+        <Text style={[styles.cardTitle, { flex: 1 }]}>Робот для Google Класу</Text>
       </View>
       <Text style={styles.hint}>
         {r
-          ? `Останній запуск: ${fmtTime(r.generatedAt)}. Завдань: ${r.counts.assignments}, зданих робіт: ${r.counts.submissions}, оцінок: ${r.counts.grades}.`
+          ? `Останній запуск: ${fmtTime(r.generatedAt)}. Завдань: ${r.counts.assignments}, зданих робіт: ${r.counts.submissions}.`
           : 'Робот ще не запускався.'}{' '}
-        Він запускається сам щогодини з 7:00 до 22:00. Щоб запустити зараз: кнопка нижче → «Run workflow» → зелена «Run
-        workflow». Через 3–5 хвилин натисніть «Оновити».
+        Він читає Google Клас збереженим входом сам, щогодини з 7:00 до 22:00.
       </Text>
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Btn title="Запустити робота" onPress={() => openUrl(ROBOT_WORKFLOW_URL)} style={{ flex: 1 }} />
+        <Btn title="Запустити робота зараз" onPress={runner.run} loading={runner.busy} style={{ flex: 1 }} />
         <Btn
           title="Оновити"
           loading={syncing}
@@ -697,6 +693,8 @@ function RobotCard({ overview, refresh }: { overview: Overview; refresh: () => P
           style={{ flex: 1 }}
         />
       </View>
+      {runner.note ? <Text style={styles.hint}>{runner.note}</Text> : null}
+      <ErrorText error={runner.error} />
       {meta.errors.map((e) => (
         <Text key={e} style={styles.error}>
           {e}
@@ -1062,10 +1060,9 @@ function AdvancedSection({ data, refresh }: { data: Overview | null; refresh: ()
           </Surface>
           <Kicker>Відповідність предметів</Kicker>
           <SubjectsSection />
-          {data && (
+          {data && !data.google?.connected && (
             <>
-              <Kicker>Інші способи для Google Класу</Kicker>
-              <RobotGoogleCard overview={data} refresh={refresh} />
+              <Kicker>Рядок сесії Google з комп’ютера</Kicker>
               <GoogleSessionCard overview={data} refresh={refresh} />
             </>
           )}
@@ -1092,10 +1089,7 @@ export default function SettingsScreen() {
         <Section title="Акаунти дитини">
           <EschoolCard overview={data} refresh={refresh} />
           <GoogleCard overview={data} refresh={refresh} />
-          {!data.google?.connected && <RemoteGoogleLoginCard overview={data} />}
-          {!data.google?.connected && (data.credentials.google_session_updated_at || data.robot) && (
-            <RobotCard overview={data} refresh={refresh} />
-          )}
+          {!data.google?.connected && !!data.credentials.google_session_updated_at && <RobotCard overview={data} refresh={refresh} />}
           <ServerCheckCard overview={data} refresh={refresh} />
         </Section>
       )}

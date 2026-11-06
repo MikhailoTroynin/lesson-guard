@@ -112,7 +112,7 @@ async function main(): Promise<number> {
     }
     const ready = hits >= 2;
     if (!ready) {
-      await worker.notify('⏱ Час на вхід у Google вийшов. Запустіть «Вхід у Google» на сторінці налаштувань ще раз.');
+      await worker.notify('⏱ Час на вхід у Google вийшов. Натисніть «Увійти через віддалений браузер» на сторінці налаштувань ще раз.');
       log('Не дочекалися входу');
       return 1;
     }

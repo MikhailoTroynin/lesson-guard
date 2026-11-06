@@ -100,7 +100,7 @@ export default {
 
     if (pathname === GOOGLE_CALLBACK_PATH && request.method === 'GET') {
       try {
-        const to = await handleGoogleCallback(new URL(request.url), env.DB, new Vault(env.DB, env.TELEGRAM_BOT_TOKEN));
+        const to = await handleGoogleCallback(new URL(request.url), env.DB, new Vault(env.DB, env.TELEGRAM_BOT_TOKEN), fetch, new Date(), env);
         // Одразу перевіряємо, щоб у Telegram прийшло «Google Клас підключено».
         if (to.endsWith('google=ok')) ctx.waitUntil(runServerCheck(env, { reason: 'manual' }).catch((e) => console.error(e)));
         return Response.redirect(to, 302);

@@ -2,3 +2,8 @@
 # Значення не комітьте і нікому не надсилайте.
 # Секрет вебхука виводиться з токена (див. src/index.ts), окремо його задавати не треба.
 TELEGRAM_BOT_TOKEN=
+# Необов'язково: спільний OAuth-клієнт Google (тоді на сторінці лише кнопка «Увійти через Google»).
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+# Необов'язково: fine-grained PAT (Actions: Read and write) — сторінка сама запускає workflow GitHub.
+GH_WORKFLOW_TOKEN=

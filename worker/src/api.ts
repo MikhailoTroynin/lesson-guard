@@ -7,7 +7,7 @@
  *   POST   /api/auth/logout
  *   GET    /api/overview                         налаштування, діти, чати, стан робота
  *   PUT    /api/settings     { …часткові… }
- *   PUT    /api/credentials  { eschool_login?, eschool_password?, google_session?, google_email?, google_password? }  (null — видалити)
+ *   PUT    /api/credentials  { eschool_login?, eschool_password?, google_session? }  (null — видалити)
  *   POST   /api/children     { name, class_name }
  *   DELETE /api/children/:id
  *   POST   /api/children/:id/link-code           → { code, expires_at }
@@ -15,9 +15,12 @@
  *   PUT    /api/chats/:chatId/admin  { admin: true|false }
  *   GET    /api/snapshot                         останні дані (оцінки, завдання) і стан перевірки
  *   POST   /api/check                            перевірити зараз (Єдина школа, Google Клас → Telegram)
- *   PUT    /api/google/client { client_id, client_secret }   OAuth-клієнт з Google Cloud Console
+ *   PUT    /api/google/client { client_id, client_secret }   OAuth-клієнт з Google Cloud Console (лише якщо
+ *                                                немає секретів GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
  *   POST   /api/google/start                     → { url } вхід через Google (повернення на /oauth/google/callback)
  *   DELETE /api/google                           відключити Google-акаунт
+ *   POST   /api/actions/run  { workflow: 'google-login' | 'robot' }
+ *                                                → { started, url } запустити workflow GitHub (через GH_WORKFLOW_TOKEN)
  *
  * Робот (Authorization: Bearer hex(HMAC(TELEGRAM_BOT_TOKEN, ROBOT_TOKEN_LABEL))):
  *   GET    /robot/config                         логіни, сесія Google, пам'ять, налаштування
@@ -26,10 +29,11 @@
  *   POST   /robot/notify     { text }            повідомлення адміністраторам (наприклад, «підтвердіть вхід у Google»)
  */
 import { EschoolLoginError, eschoolLogin } from '../../src/providers/eschool/client';
+import { isWorkflowName, runWorkflow } from './actions';
 import { authenticate, logout, pollLogin, startLogin, type Session } from './auth';
 import { describeStatus, getServerStatus, runServerCheck, type CheckEnv } from './check';
 import { Budget } from './classroom';
-import { callbackUrl, loadGoogle, saveGoogle, startGoogleLogin } from './google';
+import { callbackUrl, loadGoogle, saveGoogle, serverClient, startGoogleLogin } from './google';
 import { bearerMatches, robotToken } from './crypto';
 import { createLinkCode, findOrCreateChild } from './linkCodes';
 import { getJson, getSettings, setJson, validateSettingsPatch, type RobotStatus } from './settings';
@@ -170,13 +174,6 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
         password = (v as string | null) || null;
       } else if (k === 'google_session') {
         await vault.set('google_session', v === null || v === '' ? null : parseGoogleSession(v));
-      } else if (k === 'google_email') {
-        const email = clean(v, 200, k);
-        if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'google_email: некоректний email');
-        await vault.set('google_email', email ? email.toLowerCase() : null);
-      } else if (k === 'google_password') {
-        if (v !== null && (typeof v !== 'string' || v.length > 200)) throw new HttpError(400, `${k}: до 200 символів`);
-        await vault.set('google_password', (v as string | null) || null);
       } else {
         throw new HttpError(400, `невідоме поле ${k}`);
       }
@@ -210,6 +207,9 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
   }
 
   if (path === '/api/google/client' && m === 'PUT') {
+    if (serverClient(env)) {
+      throw new HttpError(400, 'OAuth-клієнт Google задано секретами GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET — на сторінці його не змінити');
+    }
     const body = await readBody(request);
     const clientId = clean(body.client_id, 200, 'client_id');
     const secret = typeof body.client_secret === 'string' ? body.client_secret.trim() : '';
@@ -230,23 +230,31 @@ async function pageRoutes(request: Request, env: ApiEnv, path: string, fetchImpl
   }
 
   if (path === '/api/google/start' && m === 'POST') {
-    const g = await loadGoogle(new Vault(db, env.TELEGRAM_BOT_TOKEN));
-    if (!g) throw new HttpError(400, 'спершу збережіть Client ID і Client secret');
+    const g = await loadGoogle(new Vault(db, env.TELEGRAM_BOT_TOKEN), env);
+    if (!g) throw new HttpError(400, 'OAuth-клієнт Google ще не задано: власник має додати секрети GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (або введіть Client ID і Client secret у «Додатково»)');
     return reply(request, { ok: true, url: await startGoogleLogin(db, g, new URL(request.url).origin) });
   }
 
   if (path === '/api/google' && m === 'DELETE') {
     const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
-    const g = await loadGoogle(vault);
+    const g = await loadGoogle(vault, env);
     if (g?.refresh_token) {
       // Відкликаємо доступ у Google (не страшно, якщо не вдалося).
       await (fetchImpl ?? fetch)(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(g.refresh_token)}`, {
         method: 'POST',
       }).catch(() => null);
     }
-    if (g) await saveGoogle(vault, { client_id: g.client_id, client_secret: g.client_secret });
+    // Клієнт зі сторінки лишається, щоб не вводити його знову; серверний і так у секретах.
+    await saveGoogle(vault, g?.source === 'page' ? { client_id: g.client_id, client_secret: g.client_secret } : null);
     await vault.set('classroom_cache', null);
     return reply(request, { ok: true });
+  }
+
+  if (path === '/api/actions/run' && m === 'POST') {
+    const { workflow } = await readBody(request);
+    if (!isWorkflowName(workflow)) throw new HttpError(400, 'workflow: google-login або robot');
+    const r = await runWorkflow(env, workflow, fetchImpl);
+    return reply(request, { ok: true, started: r.started, url: r.url, error: r.error });
   }
 
   if (path === '/api/children' && m === 'POST') {
@@ -351,7 +359,7 @@ async function overview(env: ApiEnv, session: Session, origin: string) {
     vault.list(),
     getJson<RobotStatus>(db, 'robot_status'),
     getServerStatus(db),
-    loadGoogle(vault),
+    loadGoogle(vault, env),
   ]);
   const login = vaultList.eschool_login ? await vault.get('eschool_login') : null;
   const adminSet = new Set(admins.results.map((a) => a.chat_id));
@@ -375,11 +383,10 @@ async function overview(env: ApiEnv, session: Session, origin: string) {
       eschool_login: login ? maskLogin(login) : null,
       eschool_password: !!vaultList.eschool_password,
       google_session_updated_at: vaultList.google_session ?? null,
-      google_email: vaultList.google_email ? await vault.get('google_email') : null,
-      google_password: !!vaultList.google_password,
     },
     google: {
       client_id: google?.client_id ?? null,
+      client_source: google?.source ?? null,
       has_secret: !!google?.client_secret,
       connected: !!google?.refresh_token,
       email: google?.email ?? null,
@@ -399,24 +406,20 @@ async function robotRoutes(request: Request, env: ApiEnv, path: string, fetchImp
   const vault = new Vault(db, env.TELEGRAM_BOT_TOKEN);
 
   if (path === '/robot/config' && request.method === 'GET') {
-    const [login, password, google, state, list, oauth, gEmail, gPassword] = await Promise.all([
+    const [login, password, google, state, list, oauth] = await Promise.all([
       vault.get('eschool_login'),
       vault.get('eschool_password'),
       vault.get('google_session'),
       vault.get('robot_state'),
       vault.list(),
-      loadGoogle(vault),
-      vault.get('google_email'),
-      vault.get('google_password'),
+      loadGoogle(vault, env),
     ]);
-    // Робот потрібен лише для Google Класу через браузер (пароль або сесія).
+    // Робот потрібен лише для Google Класу через браузер (сесія з віддаленого входу).
     // Єдину школу і Google (через вхід Google на сторінці) Worker читає сам.
-    const skip = !!oauth?.refresh_token || (!google && !(gEmail && gPassword));
+    const skip = !!oauth?.refresh_token || !google;
     return reply(request, {
       ok: true,
       skip,
-      google: gEmail && gPassword ? { email: gEmail, password: gPassword } : null,
-      google_updated_at: gPassword ? (list.google_password ?? null) : null,
       eschool: login && password ? { login, password } : null,
       google_session: google ? JSON.parse(google) : null,
       google_session_updated_at: list.google_session ?? null,
