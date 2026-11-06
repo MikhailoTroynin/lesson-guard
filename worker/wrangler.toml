@@ -1,0 +1,22 @@
+# Cloudflare Worker для Telegram-сповіщень Lesson Guard.
+# Деплой лише з GitHub Actions (.github/workflows/deploy.yml).
+name = "lesson-guard"
+main = "src/index.ts"
+tsconfig = "tsconfig.json"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lesson-guard"
+# Плейсхолдер: workflow замінює його значенням змінної репозиторію
+# CLOUDFLARE_D1_DATABASE_ID перед кожним запуском wrangler. Не комітьте сюди справжній ID.
+database_id = "__D1_DATABASE_ID__"
+migrations_dir = "migrations"
+
+# Секрети (задаються в CI через wrangler-action, локально — у .dev.vars):
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_WEBHOOK_SECRET

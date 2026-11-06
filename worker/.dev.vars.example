@@ -1,0 +1,4 @@
+# Скопіюйте у .dev.vars для `npm run dev` (файл .dev.vars у git не потрапляє).
+# Значення не комітьте і нікому не надсилайте.
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
