@@ -17,10 +17,20 @@ if (!/^https:\/\/[^/\s]+$/.test(workerUrl)) fail(`Некоректний WORKER_
 const secret = createHmac('sha256', token).update(WEBHOOK_SECRET_LABEL).digest('hex');
 console.log(`::add-mask::${secret}`);
 
-// 1. Worker живий?
-const health = await fetch(`${workerUrl}/health`).catch((e) => fail(`/health недоступний: ${e}`));
-if (!health.ok) fail(`/health відповів ${health.status}.`);
-console.log(`/health: ${await health.text()}`);
+// 1. Worker живий? Одразу після першого деплою маршрут workers.dev може ще
+// кілька секунд віддавати 404, тому повторюємо (до ~90 с).
+let lastStatus = '';
+for (let attempt = 1; ; attempt++) {
+  const res = await fetch(`${workerUrl}/health`).catch((e) => ({ ok: false, status: String(e) }));
+  if (res.ok) {
+    console.log(`/health: ${await res.text()}`);
+    break;
+  }
+  lastStatus = res.status;
+  if (attempt >= 10) fail(`/health не відповідає: ${lastStatus}.`);
+  console.log(`/health: ${lastStatus}, повтор через ${attempt * 2} с…`);
+  await new Promise((r) => setTimeout(r, attempt * 2000));
+}
 
 // 2. Реєстрація вебхука (ідемпотентно).
 const webhookUrl = `${workerUrl}/telegram/webhook`;
