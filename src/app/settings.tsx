@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 
 import { subjectForCourse } from '../core/matcher';
 import { api, loginWithTelegram, UnauthorizedError, WORKER_URL, type Overview } from '../platform/api';
@@ -965,48 +965,78 @@ export default function SettingsScreen() {
   const { loggedIn, logout, resetData } = useAppState();
   const onUnauthorized = useCallback(() => void logout(), [logout]);
   const { data, error, refresh } = useOverview(loggedIn, onUnauthorized);
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 1000;
+  const site = Platform.OS === 'web' && width >= 820;
+
+  const accounts = (
+    <>
+      <AccountCard overview={data} />
+      <ErrorText error={error} />
+      {data && (
+        <Section title="Акаунти дитини">
+          <EschoolCard overview={data} refresh={refresh} />
+          <GoogleCard overview={data} refresh={refresh} />
+          <ServerCheckCard overview={data} refresh={refresh} />
+        </Section>
+      )}
+    </>
+  );
+  const rest = (
+    <>
+      {loggedIn && data && (
+        <Section title="Діти і батьки">
+          <ChildrenCard overview={data} refresh={refresh} />
+          <ChatsCard overview={data} refresh={refresh} />
+        </Section>
+      )}
+      <NotificationsSection />
+      <AdvancedSection data={data} refresh={refresh} />
+      <Btn
+        title="Очистити історію сповіщень на цій сторінці"
+        onPress={resetData}
+        style={{ minHeight: 42 }}
+        textStyle={{ color: colors.accent800 }}
+      />
+    </>
+  );
 
   return (
     <Screen>
-      <ScreenHeader kicker="Конфігурація" title="Налаштування" />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, site && styles.containerSite]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled">
+        {site ? (
+          <View style={styles.pageHead}>
+            <Text style={styles.pageTitle}>Налаштування</Text>
+            <Text style={styles.pageLead}>
+              Підключіть акаунти дитини — далі сервер сам щогодини перевіряє Єдину школу і Google Клас і надсилає нові
+              події в Telegram.
+            </Text>
+          </View>
+        ) : (
+          <ScreenHeader kicker="Конфігурація" title="Налаштування" />
+        )}
         {!loggedIn ? (
-          <Section title="Вхід">
-            <LoginCard />
-          </Section>
+          <View style={wide ? styles.loginWide : undefined}>
+            <Section title="Вхід">
+              <LoginCard />
+            </Section>
+          </View>
+        ) : null}
+        {wide ? (
+          <View style={styles.columns}>
+            <View style={styles.column}>{loggedIn ? accounts : null}{!loggedIn && rest}</View>
+            {loggedIn && <View style={styles.column}>{rest}</View>}
+          </View>
         ) : (
           <>
-            <AccountCard overview={data} />
-            <ErrorText error={error} />
-            {data && (
-              <>
-                <Section title="Акаунти дитини">
-                  <EschoolCard overview={data} refresh={refresh} />
-                  <GoogleCard overview={data} refresh={refresh} />
-                  <ServerCheckCard overview={data} refresh={refresh} />
-                </Section>
-                <Section title="Діти і батьки">
-                  <ChildrenCard overview={data} refresh={refresh} />
-                  <ChatsCard overview={data} refresh={refresh} />
-                </Section>
-              </>
-            )}
+            {loggedIn && accounts}
+            {rest}
           </>
         )}
-
-        <NotificationsSection />
-        <AdvancedSection data={data} refresh={refresh} />
-
-        <Btn
-          title="Очистити історію сповіщень на цій сторінці"
-          onPress={resetData}
-          style={{ minHeight: 42 }}
-          textStyle={{ color: colors.accent800 }}
-        />
         <Mono style={{ fontSize: 10.5, textAlign: 'center' }}>Lesson Guard · сервер перевіряє щогодини і пише в Telegram</Mono>
       </ScrollView>
     </Screen>
@@ -1015,6 +1045,13 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: TAB_BAR_SPACE, gap: 18, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  containerSite: { maxWidth: 1200, paddingHorizontal: 32, paddingTop: 32, paddingBottom: 48, gap: 24 },
+  pageHead: { gap: 6 },
+  pageTitle: { fontFamily: fonts.heading, fontWeight: '600', fontSize: 34, lineHeight: 40, color: colors.text },
+  pageLead: { fontFamily: fonts.body, fontSize: 15, lineHeight: 22, color: colors.neutral700, maxWidth: 760 },
+  columns: { flexDirection: 'row', gap: 28, alignItems: 'flex-start' },
+  column: { flex: 1, minWidth: 0, gap: 18 },
+  loginWide: { maxWidth: 560 },
   card: { padding: 14, gap: 10 },
   rowBaseline: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 },
   cardTitle: { fontFamily: fonts.heading, fontWeight: '600', fontSize: 17, lineHeight: 20, color: colors.text },

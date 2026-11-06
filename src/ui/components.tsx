@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type PressableProps,
   type StyleProp,
@@ -172,8 +174,15 @@ export function Toggle({ on }: { on: boolean }) {
 export function ScreenHeader({ kicker, title, right }: { kicker: string; title: string; right?: ReactNode }) {
   const insets = useSafeAreaInsets();
   const framed = useInPhoneFrame();
+  const { width } = useWindowDimensions();
+  const site = Platform.OS === 'web' && width >= 820;
   return (
-    <View style={[styles.header, { paddingTop: (framed ? 0 : insets.top) + 6 }]}>
+    <View
+      style={[
+        styles.header,
+        { paddingTop: (framed ? 0 : insets.top) + 6 },
+        site && { maxWidth: 1200, width: '100%', alignSelf: 'center', paddingHorizontal: 32, paddingTop: 24 },
+      ]}>
       <View style={{ gap: 1 }}>
         <Kicker color={colors.accent700} style={{ fontSize: 10, letterSpacing: 1.4 }}>
           {kicker}
