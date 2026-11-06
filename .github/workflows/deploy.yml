@@ -7,8 +7,11 @@ name: Deploy Worker
 # • Run workflow → action = migrate → застосувати міграції D1 (worker/migrations).
 #
 # Потрібно в Settings → Secrets and variables → Actions:
-#   secrets:   CLOUDFLARE_API_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET
+#   secrets:   CLOUDFLARE_API_TOKEN, TELEGRAM_BOT_TOKEN
 #   variables: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID
+#
+# Після деплою вебхук Telegram реєструється автоматично (worker/scripts/set-webhook.mjs);
+# секрет вебхука виводиться з токена бота, окремий secret не потрібен.
 
 on:
   push:
@@ -75,10 +78,10 @@ jobs:
           fi
 
       - name: Deploy to Cloudflare
+        id: deploy
         uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
@@ -88,8 +91,13 @@ jobs:
           # через stdin і маскуються GitHub) ще до деплою.
           secrets: |
             TELEGRAM_BOT_TOKEN
-            TELEGRAM_WEBHOOK_SECRET
           command: deploy
+
+      - name: Register Telegram webhook
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.deployment-url }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: node scripts/set-webhook.mjs
 
   migrate:
     # Лише вручну: Actions → Deploy Worker → Run workflow → action = migrate.

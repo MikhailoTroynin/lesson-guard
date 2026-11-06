@@ -165,19 +165,14 @@ worker/
 |---|---|---|
 | secret | `CLOUDFLARE_API_TOKEN` | API-токен Cloudflare з правами Workers Scripts: Edit і D1: Edit |
 | secret | `TELEGRAM_BOT_TOKEN` | токен бота від @BotFather |
-| secret | `TELEGRAM_WEBHOOK_SECRET` | випадковий рядок, яким Telegram підписує запити на вебхук. Дозволено лише `A-Z a-z 0-9 _ -`, довжина 1–256 символів |
 | variable | `CLOUDFLARE_ACCOUNT_ID` | ID акаунта Cloudflare |
 | variable | `CLOUDFLARE_D1_DATABASE_ID` | ID бази D1 `lesson-guard` |
 
-`TELEGRAM_WEBHOOK_SECRET` можна згенерувати так (на своєму комп'ютері; збережіть значення в менеджері паролів, бо воно ще знадобиться для `setWebhook`):
-
-```bash
-openssl rand -hex 32
-```
+Окремий секрет для вебхука не потрібен: Worker і скрипт реєстрації обчислюють його з токена бота як `hex(HMAC-SHA256(токен, "lesson-guard:telegram-webhook"))`. Якщо змінити токен у @BotFather і в GitHub, наступний деплой сам перереєструє вебхук з новим секретом.
 
 ID бази в `worker/wrangler.toml` не зберігається: там стоїть плейсхолдер `__D1_DATABASE_ID__`. Перед кожним запуском wrangler workflow замінює його значенням змінної `CLOUDFLARE_D1_DATABASE_ID` (`sed`) і падає, якщо змінна порожня, не схожа на UUID або плейсхолдер лишився.
 
-Обидва Telegram-секрети потрапляють у Worker через параметр `secrets` у `cloudflare/wrangler-action`: значення передаються у `wrangler secret bulk` через stdin і в лог не виводяться.
+`TELEGRAM_BOT_TOKEN` потрапляє у Worker через параметр `secrets` у `cloudflare/wrangler-action`: значення передаються у `wrangler secret bulk` через stdin і в лог не виводяться.
 
 ### Як запускається деплой
 
@@ -202,27 +197,14 @@ Worker публікується на `https://lesson-guard.<піддомен>.wo
 4. **Actions → Deploy Worker → Run workflow → action = `deploy`** (або **Re-run failed jobs** у запуску, що впав).
 5. Перевірте: `https://lesson-guard.<піддомен>.workers.dev/health` має повернути `{"ok":true,...}`.
 
-### Підключити вебхук Telegram
+### Вебхук Telegram
 
-Після успішного деплою один раз скажіть Telegram, куди надсилати оновлення. Команди нижче читають токен і секрет з клавіатури без відображення, тож вони не потрапляють в історію shell:
+Реєструється автоматично: після `wrangler deploy` job запускає `worker/scripts/set-webhook.mjs`, який
+1. перевіряє `GET /health` задеплоєного Worker'а;
+2. викликає `setWebhook` з адресою `…/telegram/webhook` і секретом, виведеним з токена;
+3. перевіряє через `getWebhookInfo`, що Telegram запам'ятав саме цю адресу.
 
-```bash
-read -rsp "Bot token: " BOT_TOKEN; echo; read -rsp "Webhook secret: " WEBHOOK_SECRET; echo
-```
-
-```bash
-curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
-  --data-urlencode "url=https://lesson-guard.<піддомен>.workers.dev/telegram/webhook" \
-  --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
-  --data-urlencode 'allowed_updates=["message","my_chat_member"]' \
-  -d drop_pending_updates=true
-```
-
-```bash
-curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"; unset BOT_TOKEN WEBHOOK_SECRET
-```
-
-`getWebhookInfo` має показати вашу адресу і не мати `last_error_message`. Якщо змінюєте `TELEGRAM_WEBHOOK_SECRET` у GitHub, задеплойте Worker і повторіть `setWebhook` з новим значенням.
+Токен передається скрипту лише через змінну середовища, секрет маскується в лозі. Повторний деплой безпечний: `setWebhook` ідемпотентний.
 
 ### Локальна перевірка (без доступу до Cloudflare)
 

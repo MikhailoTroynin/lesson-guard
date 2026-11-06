@@ -19,4 +19,4 @@ migrations_dir = "migrations"
 
 # Секрети (задаються в CI через wrangler-action, локально — у .dev.vars):
 #   TELEGRAM_BOT_TOKEN
-#   TELEGRAM_WEBHOOK_SECRET
+#   (секрет вебхука виводиться з токена — див. src/index.ts)

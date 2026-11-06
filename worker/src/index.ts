@@ -6,12 +6,15 @@
  *                           заголовком X-Telegram-Bot-Api-Secret-Token
  *
  * Бізнес-логіки поки немає: вебхук лише перевіряє секрет і відповідає 200.
+ *
+ * Секрет вебхука окремо не зберігається: він виводиться з токена бота
+ * (HMAC-SHA256, див. webhookSecret). Те саме обчислює scripts/set-webhook.mjs,
+ * коли реєструє вебхук у Telegram після деплою.
  */
 
 export interface Env {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_WEBHOOK_SECRET: string;
 }
 
 const WEBHOOK_PATH = '/telegram/webhook';
@@ -22,6 +25,23 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+/** Мітка, з якої виводиться секрет вебхука. Має збігатися з scripts/set-webhook.mjs. */
+const WEBHOOK_SECRET_LABEL = 'lesson-guard:telegram-webhook';
+
+/** hex(HMAC-SHA256(key = токен бота, message = WEBHOOK_SECRET_LABEL)). */
+async function webhookSecret(botToken: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(botToken),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(WEBHOOK_SECRET_LABEL));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Порівняння рядків за сталий час (через SHA-256, щоб довжина не впливала). */
@@ -35,11 +55,11 @@ async function safeEqual(a: string, b: string): Promise<boolean> {
 }
 
 async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
-  const expected = env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expected) {
-    // Секрет не налаштовано — не приймаємо нічого, щоб не відкрити вебхук для всіх.
+  if (!env.TELEGRAM_BOT_TOKEN) {
+    // Токен не налаштовано — не приймаємо нічого, щоб не відкрити вебхук для всіх.
     return json({ ok: false, error: 'webhook not configured' }, 503);
   }
+  const expected = await webhookSecret(env.TELEGRAM_BOT_TOKEN);
   const received = request.headers.get(SECRET_HEADER) ?? '';
   if (!(await safeEqual(received, expected))) {
     return json({ ok: false, error: 'unauthorized' }, 401);
