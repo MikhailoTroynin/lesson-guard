@@ -366,7 +366,15 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 }
 
 function GoogleCard({ overview, refresh }: { overview: Overview; refresh: () => Promise<void> }) {
-  const g = overview.google;
+  // Старіший сервер може ще не віддавати google — тоді показуємо картку «не підключено».
+  const g: Overview['google'] = overview.google ?? {
+    client_id: null,
+    has_secret: false,
+    connected: false,
+    email: null,
+    connected_at: null,
+    redirect_uri: `${WORKER_URL}/oauth/google/callback`,
+  };
   const [clientId, setClientId] = useState('');
   const [secret, setSecret] = useState('');
   const [editing, setEditing] = useState(!g.client_id);
@@ -496,7 +504,7 @@ function ServerCheckCard({ overview, refresh }: { overview: Overview; refresh: (
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
-  const s = overview.server;
+  const s = overview.server ?? null;
   const src = (k: 'direct' | 'robot' | 'none') => (k === 'direct' ? 'напряму' : k === 'robot' ? 'через робота' : 'не підключено');
   const hasErrors = !!s && ((s.sources.eschool !== 'none' && !!s.errors.eschool) || (s.sources.classroom !== 'none' && !!s.errors.classroom));
 

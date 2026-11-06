@@ -70,7 +70,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: worker/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            worker/package-lock.json
+
+      # Worker використовує спільний код із src/ (перевірка, клієнти Єдиної школи й
+      # Google Класу). Тести цих файлів читають кореневий tsconfig.json (expo), тому
+      # потрібні й залежності кореня.
+      - name: Install root dependencies
+        working-directory: .
+        run: npm ci
 
       - run: npm ci
 
