@@ -1,11 +1,9 @@
 import { Tabs } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 
-// Імпорт також реєструє фонову задачу (defineTask на рівні модуля).
 import { registerBackgroundSync } from '../platform/background';
-import { ensurePermission, initNotifications } from '../platform/notifications';
 import { AppStateProvider } from '../state/AppState';
 import { PhoneFrame } from '../ui/PhoneFrame';
 import { SheetProvider } from '../ui/Sheet';
@@ -29,16 +27,8 @@ function AppTabs() {
 
 export default function RootLayout() {
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      // У браузері: періодична перевірка, поки вкладка відкрита.
-      void registerBackgroundSync();
-      return;
-    }
-    (async () => {
-      await initNotifications();
-      await ensurePermission();
-      await registerBackgroundSync();
-    })().catch((e) => console.warn('init failed', e));
+    // Періодичне оновлення даних, поки вкладка відкрита.
+    void registerBackgroundSync();
   }, []);
 
   return (

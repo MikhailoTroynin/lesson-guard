@@ -3,9 +3,10 @@ import { AppState as RNAppState } from 'react-native';
 
 import { DEFAULT_SETTINGS, type Alert, type Settings, type TimelineItem } from '../core/types';
 import { DEMO_LAST_STEP } from '../providers/demo';
+import { api, getToken, setToken } from '../platform/api';
 import { onBackgroundSync } from '../platform/background';
 import { storage, type SyncMeta } from '../platform/storage';
-import { performSync } from '../services/sync';
+import { performSync, SERVER_SETTING_KEYS } from '../services/sync';
 
 interface AppStateValue {
   ready: boolean;
@@ -15,6 +16,11 @@ interface AppStateValue {
   timeline: TimelineItem[];
   meta: SyncMeta;
   demoStep: number;
+  /** Чи є сесія сторінки налаштувань (вхід через Telegram). */
+  loggedIn: boolean;
+  /** Після входу: вимикає демо й підтягує справжні дані. */
+  onLoggedIn: () => Promise<void>;
+  logout: () => Promise<void>;
   /** Алерти з останньої ручної перевірки — показуємо банером. */
   fresh: Alert[];
   dismissFresh: () => void;
@@ -37,6 +43,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [meta, setMeta] = useState<SyncMeta>({ errors: [] });
   const [demoStep, setDemoStep] = useState(0);
   const [fresh, setFresh] = useState<Alert[]>([]);
+  const [loggedIn, setLoggedIn] = useState(false);
 
   const reload = useCallback(async () => {
     const [s, a, t, m, d] = await Promise.all([
@@ -51,6 +58,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setTimeline(t);
     setMeta(m);
     setDemoStep(d);
+    setLoggedIn(!!(await getToken()));
     return m;
   }, []);
 
@@ -90,6 +98,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const updateSettings = useCallback(
     async (patch: Partial<Settings>) => {
+      // Налаштування сповіщень зберігаються на сервері (їх використовує й робот/бот).
+      const serverPatch = Object.fromEntries(
+        Object.entries(patch).filter(([k]) => (SERVER_SETTING_KEYS as readonly string[]).includes(k)),
+      );
+      if (Object.keys(serverPatch).length && (await getToken())) await api.putSettings(serverPatch);
       const next = { ...(await storage.getSettings()), ...patch };
       await storage.setSettings(next);
       setSettings(next);
@@ -121,6 +134,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     await sync();
   }, [sync]);
 
+  const onLoggedIn = useCallback(async () => {
+    setLoggedIn(true);
+    const cur = await storage.getSettings();
+    if (cur.demoMode && process.env.EXPO_PUBLIC_DEMO !== '1') {
+      await storage.setSettings({ ...cur, demoMode: false });
+      await storage.resetData();
+    }
+    await reload();
+    await sync();
+  }, [reload, sync]);
+
+  const logout = useCallback(async () => {
+    await api.logout().catch(() => {});
+    await setToken(null);
+    setLoggedIn(false);
+    await storage.resetData();
+    await reload();
+  }, [reload]);
+
   const resetData = useCallback(async () => {
     await storage.resetData();
     setFresh([]);
@@ -137,6 +169,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       meta,
       demoStep,
       fresh,
+      loggedIn,
+      onLoggedIn,
+      logout,
       dismissFresh: () => setFresh([]),
       sync,
       updateSettings,
@@ -145,7 +180,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       nextDemoDay,
       resetData,
     }),
-    [ready, syncing, settings, alerts, timeline, meta, demoStep, fresh, sync, updateSettings, markAllRead, markRead, nextDemoDay, resetData],
+    [
+      ready,
+      syncing,
+      settings,
+      alerts,
+      timeline,
+      meta,
+      demoStep,
+      fresh,
+      loggedIn,
+      onLoggedIn,
+      logout,
+      sync,
+      updateSettings,
+      markAllRead,
+      markRead,
+      nextDemoDay,
+      resetData,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

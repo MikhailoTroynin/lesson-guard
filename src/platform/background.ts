@@ -1,31 +1,31 @@
-import * as BackgroundTask from 'expo-background-task';
-import * as TaskManager from 'expo-task-manager';
-
+import { storage } from './storage';
 import { performSync } from '../services/sync';
 
-export const SYNC_TASK = 'lesson-guard-sync';
-/** Хвилини між фоновими перевірками (Android сам вирішує точний час). */
-const INTERVAL_MINUTES = 4 * 60;
+/** Як часто перевіряти, поки вкладка відкрита. */
+const INTERVAL_MS = 30 * 60 * 1000;
 
-// defineTask має виконатися на верхньому рівні модуля, ще до рендеру.
-TaskManager.defineTask(SYNC_TASK, async () => {
-  try {
-    await performSync();
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Failed;
-  }
-});
+let timer: ReturnType<typeof setInterval> | null = null;
+const listeners = new Set<() => void>();
 
-export async function registerBackgroundSync(): Promise<void> {
-  const status = await BackgroundTask.getStatusAsync();
-  if (status === BackgroundTask.BackgroundTaskStatus.Restricted) return;
-  if (!(await TaskManager.isTaskRegisteredAsync(SYNC_TASK))) {
-    await BackgroundTask.registerTaskAsync(SYNC_TASK, { minimumInterval: INTERVAL_MINUTES });
-  }
+/** Підписка на завершення автоматичної перевірки (щоб оновити екран). */
+export function onBackgroundSync(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
 }
 
-/** На Android екран оновлюється при поверненні в додаток (AppState 'active'). */
-export function onBackgroundSync(_fn: () => void): () => void {
-  return () => {};
+/**
+ * У браузері справжніх фонових задач немає: перевіряємо раз на 30 хв, поки сторінка відкрита.
+ * У демо-режимі нічого не робимо — там дні гортаються вручну.
+ */
+export async function registerBackgroundSync(): Promise<void> {
+  if (timer) return;
+  timer = setInterval(async () => {
+    try {
+      if ((await storage.getSettings()).demoMode) return;
+      await performSync();
+    } catch {
+      // помилка вже записана в meta або буде показана при наступній ручній перевірці
+    }
+    listeners.forEach((fn) => fn());
+  }, INTERVAL_MS);
 }

@@ -64,7 +64,7 @@ export function parseActionResponse(text: string): ActionResult | null {
   }
 }
 
-/** Дістає токен щоденника з заголовків Set-Cookie (на Android кілька cookie склеюються через кому). */
+/** Дістає токен щоденника з заголовків Set-Cookie (кілька cookie склеюються через кому). */
 export function tokenFromSetCookie(header: string | null): string | null {
   if (!header) return null;
   const m = /(?:^|[\s,;])application_token=([^;,\s]+)/.exec(header);
@@ -112,7 +112,6 @@ async function callLoginAction(
     method: 'POST',
     headers: { 'Next-Action': actionId, Accept: 'text/x-component' },
     body,
-    credentials: 'include',
   });
   const text = await res.text();
   return { result: parseActionResponse(text), token: tokenFromSetCookie(res.headers.get('set-cookie')), status: res.status };
@@ -171,7 +170,7 @@ export class EschoolGradesProvider implements GradesProvider {
   private async api<T>(token: string, path: string): Promise<{ status: number; body: T | null }> {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (token) headers['X-Auth-Token'] = token;
-    const res = await this.fetchFn(`${DIARY}${path}`, { headers, credentials: 'include' });
+    const res = await this.fetchFn(`${DIARY}${path}`, { headers });
     if (res.status === 401 || res.status === 403) throw new AuthExpired();
     let body: T | null = null;
     try {

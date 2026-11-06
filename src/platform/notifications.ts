@@ -1,51 +1,29 @@
-import * as Notifications from 'expo-notifications';
-import { AndroidImportance } from 'expo-notifications';
+import type { Alert } from '../core/types';
 
-import type { Alert, AlertKind } from '../core/types';
+/**
+ * У браузері — стандартні сповіщення Notification API. Вони показуються,
+ * поки вкладка з сайтом відкрита (без service worker).
+ */
+export const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
 
-const CHANNELS: Record<AlertKind, { id: string; name: string; importance: AndroidImportance }> = {
-  bad_grade: { id: 'bad-grade', name: 'Погані оцінки', importance: AndroidImportance.HIGH },
-  empty_submission: {
-    id: 'empty-submission',
-    name: 'Порожні здані роботи',
-    importance: AndroidImportance.HIGH,
-  },
-  new_assignment: {
-    id: 'new-assignment',
-    name: 'Нові завдання',
-    importance: AndroidImportance.DEFAULT,
-  },
-};
-
-export const notificationsSupported = true;
-
-export async function initNotifications(): Promise<void> {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-  // На Android 13+ запит дозволу з'являється лише після створення каналу.
-  for (const c of Object.values(CHANNELS)) {
-    await Notifications.setNotificationChannelAsync(c.id, { name: c.name, importance: c.importance });
+export async function ensurePermission(): Promise<boolean> {
+  if (!notificationsSupported) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try {
+    return (await Notification.requestPermission()) === 'granted';
+  } catch {
+    return false;
   }
 }
 
-export async function ensurePermission(): Promise<boolean> {
-  const current = await Notifications.getPermissionsAsync();
-  if (current.granted) return true;
-  const asked = await Notifications.requestPermissionsAsync();
-  return asked.granted;
-}
-
 export async function showAlertNotifications(alerts: Alert[]): Promise<void> {
-  for (const a of alerts) {
-    await Notifications.scheduleNotificationAsync({
-      content: { title: a.title, body: a.body, data: { alertId: a.id } },
-      trigger: { channelId: CHANNELS[a.kind].id },
-    });
+  if (!notificationsSupported || Notification.permission !== 'granted') return;
+  for (const a of alerts.slice(0, 5)) {
+    try {
+      new Notification(a.title, { body: a.body, tag: a.id, icon: '/lesson-guard/favicon.ico' });
+    } catch {
+      // деякі мобільні браузери дозволяють сповіщення лише через service worker
+    }
   }
 }

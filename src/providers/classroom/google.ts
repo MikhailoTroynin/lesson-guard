@@ -130,7 +130,7 @@ export class GoogleClassroomProvider implements ClassroomProvider {
     if (!res.ok) {
       let detail = '';
       try {
-        detail = (await res.json())?.error?.message ?? '';
+        detail = ((await res.json()) as { error?: { message?: string } } | null)?.error?.message ?? '';
       } catch {
         // ignore
       }

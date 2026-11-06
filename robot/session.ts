@@ -4,19 +4,18 @@
  * Google не пускає автоматизований браузер входити паролем. Тому вхід робить людина:
  * скрипт відкриває ЗВИЧАЙНИЙ Chrome (без керування роботом) з окремим тимчасовим профілем.
  * Ви входите акаунтом дитини, як завжди (з підтвердженням на телефоні, якщо Google попросить),
- * відкривається Google Клас — і скрипт забирає cookies цього профілю, шифрує їх паролем робота
- * й зберігає рядок для секрету GOOGLE_SESSION. Тимчасовий профіль потім видаляється.
+ * відкривається Google Клас — і скрипт забирає cookies цього профілю й зберігає рядок,
+ * який треба вставити на сторінці налаштувань («Сесія Google»). Тимчасовий профіль потім видаляється.
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createInterface } from 'node:readline/promises';
 import { chromium } from 'playwright';
 
 import { CLASSROOM } from './google';
-import { encodeSessionSecret, type StorageState } from './state';
+import { encodeSessionString, type StorageState } from './state';
 
 const PORT = 9333;
 
@@ -38,13 +37,6 @@ function findChrome(): string {
 }
 
 async function main(): Promise<void> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const passphrase =
-    process.env.ROBOT_PASSPHRASE?.trim() ||
-    (await rl.question('Пароль робота (той самий, що в секреті ROBOT_PASSPHRASE): ')).trim();
-  rl.close();
-  if (passphrase.length < 12) throw new Error('Пароль робота має бути щонайменше 12 символів.');
-
   const profile = await mkdtemp(join(tmpdir(), 'lesson-guard-'));
   const chrome = spawn(
     findChrome(),
@@ -80,12 +72,12 @@ async function main(): Promise<void> {
     const state = (await ctx.storageState()) as StorageState;
     const google = state.cookies.filter((c) => /google\.com$/.test((c as { domain: string }).domain));
     if (google.length === 0) throw new Error('Cookies Google не знайдено — схоже, вхід не завершився.');
-    await writeFile('google-session.txt', encodeSessionSecret({ cookies: google, origins: [] }, passphrase));
+    await writeFile('google-session.txt', encodeSessionString({ cookies: google, origins: [] }), { mode: 0o600 });
     await browser.close().catch(() => {});
     console.log(
-      '\nГотово! Відкрийте файл google-session.txt, скопіюйте весь рядок і додайте в GitHub:\n' +
-        'Settings → Secrets and variables → Actions → New repository secret, назва GOOGLE_SESSION.\n' +
-        'Після цього видаліть файл google-session.txt.',
+      '\nГотово! Відкрийте файл google-session.txt, скопіюйте весь рядок і вставте його на сторінці\n' +
+        'налаштувань: https://mikhailotroynin.github.io/lesson-guard/settings → «Сесія Google» → «Зберегти».\n' +
+        'Після цього видаліть файл google-session.txt: у ньому вхід в акаунт дитини.',
     );
   } finally {
     chrome.kill();

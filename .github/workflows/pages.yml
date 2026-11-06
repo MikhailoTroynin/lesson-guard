@@ -1,6 +1,6 @@
-name: Deploy demo to GitHub Pages
+name: Deploy page to GitHub Pages
 
-# Збирає веб-демо і публікує його через GitHub Actions (як в OrthodoxClendar).
+# Збирає сторінку Lesson Guard (налаштування + огляд) і публікує її через GitHub Actions.
 # Одноразово: Settings → Pages → Build and deployment → Source: GitHub Actions.
 on:
   push:
@@ -28,7 +28,8 @@ jobs:
       - run: npm ci
       - run: npm run export:web
         env:
-          EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
+          # Адреса Cloudflare Worker'а; порожньо — типова (див. src/platform/api.ts).
+          EXPO_PUBLIC_WORKER_URL: ${{ vars.WORKER_URL }}
       - name: SPA fallback and no Jekyll
         run: |
           cp dist/index.html dist/404.html

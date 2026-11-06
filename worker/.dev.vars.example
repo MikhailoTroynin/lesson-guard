@@ -1,4 +1,4 @@
 # Скопіюйте у .dev.vars для `npm run dev` (файл .dev.vars у git не потрапляє).
 # Значення не комітьте і нікому не надсилайте.
+# Секрет вебхука виводиться з токена (див. src/index.ts), окремо його задавати не треба.
 TELEGRAM_BOT_TOKEN=
-TELEGRAM_WEBHOOK_SECRET=

@@ -4,38 +4,15 @@
     "slug": "lesson-guard",
     "version": "0.1.0",
     "scheme": "lessonguard",
-    "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "android": {
-      "package": "com.mikhailotroynin.lessonguard",
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "POST_NOTIFICATIONS"
-      ]
-    },
     "web": {
       "favicon": "./assets/favicon.png",
       "output": "single",
       "name": "Lesson Guard"
     },
     "plugins": [
-      "expo-router",
-      [
-        "expo-notifications",
-        {
-          "defaultChannel": "bad-grade",
-          "color": "#D93025"
-        }
-      ],
-      "expo-background-task",
-      "expo-secure-store"
+      "expo-router"
     ],
     "experiments": {
       "typedRoutes": true,

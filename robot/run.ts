@@ -4,10 +4,9 @@
  * Запускається за розкладом у GitHub Actions (.github/workflows/robot.yml):
  * відкриває справжній браузер (Playwright + Chromium), заходить у «Єдину школу»
  * і Google Клас акаунтом дитини, збирає оцінки, завдання й здані роботи і
- * кладе зашифрований знімок у гілку `robot-data`. Додаток на телефоні його читає.
+ * віддає їх Cloudflare Worker'у. Логіни й сесію Google він бере звідти ж —
+ * їх вводять на сторінці налаштувань (GitHub Pages).
  */
-import { createHash } from 'node:crypto';
-import { join } from 'node:path';
 import { chromium } from 'playwright';
 
 import type { RobotSnapshot } from '../src/core/snapshot';
@@ -16,14 +15,8 @@ import { kyivDay } from './dates';
 import { Debug } from './debug';
 import { fetchEschoolGrades } from './eschool';
 import { ensureGoogleSession } from './google';
-import {
-  decodeSessionSecret,
-  mergeStorage,
-  readEncrypted,
-  writeEncrypted,
-  type RobotState,
-  type StorageState,
-} from './state';
+import { mergeStorage, type RobotState, type StorageState } from './state';
+import { DEFAULT_WORKER_URL, WorkerClient } from './worker';
 
 const GRADES_DAYS = 30;
 const FORGET_DAYS = 120;
@@ -33,36 +26,29 @@ const log = (s: string) => console.log(`[${new Date().toISOString().slice(11, 19
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0];
 
 async function main(): Promise<number> {
-  const passphrase = env('ROBOT_PASSPHRASE');
-  if (!passphrase || passphrase.length < 12) {
-    console.error('Задайте секрет ROBOT_PASSPHRASE (щонайменше 12 символів) — ним шифруються дані.');
+  const botToken = env('TELEGRAM_BOT_TOKEN');
+  if (!botToken) {
+    console.error('Немає секрету TELEGRAM_BOT_TOKEN — без нього робот не може звернутися до Worker\'а.');
     return 2;
   }
-  const dataDir = env('DATA_DIR') ?? 'robot-data';
+  const worker = new WorkerClient(botToken, env('WORKER_URL') ?? DEFAULT_WORKER_URL);
   const debug = new Debug(env('DEBUG_DIR'));
   const now = new Date();
 
-  let state: RobotState = { items: {} };
-  try {
-    state = (await readEncrypted<RobotState>(join(dataDir, 'state.json'), passphrase)) ?? state;
-  } catch (e) {
-    log(`Стан робота не розшифровано (змінили ROBOT_PASSPHRASE?) — починаю з нуля: ${message(e)}`);
+  const config = await worker.config();
+  if (config.skip) {
+    log('Робот не потрібен: Єдину школу і Google Клас Worker читає сам (вхід через Google на сторінці). Завершую.');
+    return 0;
   }
+  const state: RobotState = config.state ?? { items: {} };
+  state.items ??= {};
 
-  // GOOGLE_SESSION (з `npm run robot:session`) перекриває збережені cookies, якщо його оновили.
-  const sessionSecret = env('GOOGLE_SESSION');
+  // Сесія Google зі сторінки налаштувань перекриває збережені cookies, якщо її оновили.
   let storage: StorageState | undefined = state.storageState;
-  if (sessionSecret) {
-    const hash = createHash('sha256').update(sessionSecret).digest('hex').slice(0, 16);
-    if (state.sessionHash !== hash) {
-      try {
-        storage = mergeStorage(storage, decodeSessionSecret(sessionSecret, passphrase));
-        state.sessionHash = hash;
-        log('Використовую сесію Google із секрету GOOGLE_SESSION');
-      } catch (e) {
-        log(`GOOGLE_SESSION не розшифровано (інший ROBOT_PASSPHRASE?): ${message(e)}`);
-      }
-    }
+  if (config.google_session && config.google_session_updated_at !== state.sessionAppliedAt) {
+    storage = mergeStorage(storage, config.google_session);
+    state.sessionAppliedAt = config.google_session_updated_at ?? undefined;
+    log('Використовую нову сесію Google зі сторінки налаштувань');
   }
 
   const snapshot: RobotSnapshot = {
@@ -84,8 +70,8 @@ async function main(): Promise<number> {
 
   try {
     // ── Єдина школа ──
-    const esLogin = env('ESCHOOL_LOGIN');
-    const esPassword = env('ESCHOOL_PASSWORD');
+    const esLogin = config.eschool?.login ?? env('ESCHOOL_LOGIN');
+    const esPassword = config.eschool?.password ?? env('ESCHOOL_PASSWORD');
     if (esLogin && esPassword) {
       try {
         const from = kyivDay(new Date(now.getTime() - GRADES_DAYS * 86_400_000));
@@ -96,7 +82,7 @@ async function main(): Promise<number> {
         log(`Єдина школа: ПОМИЛКА — ${snapshot.errors.eschool}`);
       }
     } else {
-      snapshot.errors.eschool = 'робот не налаштований: задайте секрети ESCHOOL_LOGIN і ESCHOOL_PASSWORD';
+      snapshot.errors.eschool = 'робот не налаштований: введіть логін і пароль Єдиної школи на сторінці налаштувань';
       log(`Єдина школа: ${snapshot.errors.eschool}`);
     }
 
@@ -114,7 +100,7 @@ async function main(): Promise<number> {
         log(`Google Клас: ПОМИЛКА — ${snapshot.errors.classroom}`);
       }
     } else {
-      snapshot.errors.classroom = 'робот не налаштований: задайте секрет GOOGLE_SESSION (див. README)';
+      snapshot.errors.classroom = 'робот не налаштований: додайте сесію Google на сторінці налаштувань (див. README)';
       log(`Google Клас: ${snapshot.errors.classroom}`);
     }
 
@@ -128,9 +114,8 @@ async function main(): Promise<number> {
     if (Date.parse(m.firstSeen) < forget) delete state.items[id];
   }
 
-  await writeEncrypted(join(dataDir, 'snapshot.json'), snapshot, passphrase);
-  await writeEncrypted(join(dataDir, 'state.json'), state, passphrase);
-  log(`Збережено в ${dataDir}/ (зашифровано)`);
+  await worker.report(snapshot, state);
+  log(`Дані передано у Worker (${worker.url})`);
 
   // Червоний запуск (і лист від GitHub) — лише коли джерело налаштоване, але не прочиталося.
   const failed = Object.values(snapshot.errors).some((e) => e && !e.startsWith('робот не налаштований'));
